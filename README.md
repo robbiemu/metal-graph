@@ -37,7 +37,7 @@ src/                    Core implementation
 tests/                  Smoke and unit tests
 docs/                   Design notes and project decisions
 bindings/swift/         Reserved for future Swift package/adapters
-bindings/python/        Reserved for future Python bindings
+bindings/python/        Optional Python adapter over the public C ABI
 bindings/rust/          Reserved for future Rust bindings
 ```
 
@@ -94,7 +94,7 @@ The project starts C-first because it gives the cleanest compatibility path:
 
 - Objective-C can include the headers directly.
 - Swift can import the C module via `include/module.modulemap`.
-- Python can use a C extension, ctypes/cffi, or generated bindings later.
+- Python currently uses a thin ctypes adapter; cffi or generated bindings may be added later.
 - Rust can bind through `bindgen` or handwritten `extern "C"` declarations later.
 
 The C API uses opaque handles and status codes. Ownership, lifetime, thread-safety, and backend error reporting should be documented before the API is treated as stable.
