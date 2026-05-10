@@ -49,6 +49,12 @@ typedef struct mg_workspace_node {
     size_t alignment;
 } mg_workspace_node_t;
 
+typedef struct mg_workspace_desc {
+    size_t size;
+    size_t byte_count;
+    size_t alignment;
+} mg_workspace_desc_t;
+
 typedef struct mg_internal_workspace_fill_node {
     size_t size;
     size_t alignment;
@@ -57,7 +63,7 @@ typedef struct mg_internal_workspace_fill_node {
     size_t dst_offset;
 } mg_internal_workspace_fill_node_t;
 
-enum { MG_NODE_INTERNAL_WORKSPACE_FILL = 1000 };
+enum { MG_NODE_INTERNAL_WORKSPACE = 1000, MG_NODE_INTERNAL_WORKSPACE_FILL = 1001 };
 
 struct mg_error {
     mg_status_t status;
@@ -241,6 +247,8 @@ void mg_workspace_plan_clear(mg_workspace_plan_t *plan);
 mg_status_t mg_workspace_plan_offset_for_node(const mg_workspace_plan_t *plan, mg_node_id_t node_id,
                                               size_t *out_offset, mg_error_t **out_error);
 
+mg_status_t mg_internal_graph_add_workspace_node(mg_graph_t *graph, const mg_workspace_desc_t *desc,
+                                                 mg_node_t **out_node, mg_error_t **out_error);
 mg_status_t mg_internal_graph_add_workspace_fill_node(mg_graph_t *graph,
                                                       const mg_workspace_desc_t *desc,
                                                       uint8_t value, mg_buffer_t *dst,

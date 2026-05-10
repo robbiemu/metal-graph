@@ -257,8 +257,8 @@ int main(void) {
                       "create small arena graph", &error) ||
         expect_status(mgGraphSetArena(small_arena_graph, small_arena, &error), MG_STATUS_OK,
                       "set small arena", &error) ||
-        expect_status(mgGraphAddWorkspaceNode(small_arena_graph, &too_large_workspace,
-                                              &workspace_test_node, &error),
+        expect_status(mg_internal_graph_add_workspace_node(small_arena_graph, &too_large_workspace,
+                                                           &workspace_test_node, &error),
                       MG_STATUS_OK, "add oversized workspace", &error)) {
         mgArenaDestroy(small_arena);
         mgGraphDestroy(small_arena_graph);
@@ -292,11 +292,11 @@ int main(void) {
     one_byte_workspace.alignment = 1;
     if (expect_status(mgGraphCreate(&overflow_graph, &error), MG_STATUS_OK, "create overflow graph",
                       &error) ||
-        expect_status(
-            mgGraphAddWorkspaceNode(overflow_graph, &huge_workspace, &workspace_test_node, &error),
-            MG_STATUS_OK, "add huge workspace", &error) ||
-        expect_status(mgGraphAddWorkspaceNode(overflow_graph, &one_byte_workspace,
-                                              &workspace_test_node, &error),
+        expect_status(mg_internal_graph_add_workspace_node(overflow_graph, &huge_workspace,
+                                                           &workspace_test_node, &error),
+                      MG_STATUS_OK, "add huge workspace", &error) ||
+        expect_status(mg_internal_graph_add_workspace_node(overflow_graph, &one_byte_workspace,
+                                                           &workspace_test_node, &error),
                       MG_STATUS_OK, "add overflow workspace", &error)) {
         mgGraphDestroy(overflow_graph);
         goto cleanup;
@@ -371,8 +371,9 @@ int main(void) {
                       "add copy", &error) ||
         expect_status(mgGraphAddFillNode(graph, &fill_desc, &fill_node, &error), MG_STATUS_OK,
                       "add fill", &error) ||
-        expect_status(mgGraphAddWorkspaceNode(graph, &workspace_desc, &workspace_node, &error),
-                      MG_STATUS_OK, "add workspace node", &error) ||
+        expect_status(
+            mg_internal_graph_add_workspace_node(graph, &workspace_desc, &workspace_node, &error),
+            MG_STATUS_OK, "add workspace node", &error) ||
         expect_status(mg_internal_graph_add_workspace_fill_node(graph, &workspace_fill_desc, 0xCD,
                                                                 workspace_buffer, 0,
                                                                 &workspace_fill_node, &error),

@@ -178,7 +178,7 @@ mg_status_t mg_graph_plan_workspace(const mg_graph_t *graph, const size_t *order
         size_t size = 0;
         size_t alignment = 0;
 
-        if (node->kind == MG_NODE_WORKSPACE) {
+        if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE) {
             size = node->as.workspace.size;
             alignment = node->as.workspace.alignment;
         } else if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {

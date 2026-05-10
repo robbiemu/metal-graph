@@ -68,8 +68,7 @@ typedef enum mg_node_kind {
     MG_NODE_FILL = 3,
     MG_NODE_EVENT_WAIT = 4,
     MG_NODE_EVENT_SIGNAL = 5,
-    MG_NODE_BARRIER = 6,
-    MG_NODE_WORKSPACE = 7
+    MG_NODE_BARRIER = 6
 } mg_node_kind_t;
 
 typedef struct mg_version {
@@ -136,21 +135,6 @@ typedef struct mg_arena_desc {
     size_t byte_count;
     size_t alignment;
 } mg_arena_desc_t;
-
-/*
- * Phase 2 workspace requirement descriptor.
- *
- * A workspace node declares transient graph-exec-owned memory needed by future or internal
- * execution steps. byte_count and alignment must be nonzero; alignment must be a power of two. The
- * size field is the descriptor byte size for ABI versioning. Layout is computed during
- * mgGraphInstantiate and is not stable across instantiations. Phase 2 uses conservative monotonic,
- * non-overlapping layout and provides no launch-time alloc/free semantics.
- */
-typedef struct mg_workspace_desc {
-    size_t size;
-    size_t byte_count;
-    size_t alignment;
-} mg_workspace_desc_t;
 
 MG_API mg_version_t mgVersion(void);
 MG_API const char *mgVersionString(void);
@@ -239,13 +223,6 @@ MG_API mg_status_t mgGraphAddEventSignalNode(mg_graph_t *graph, mg_event_t *even
  */
 MG_API mg_status_t mgGraphAddBarrierNode(mg_graph_t *graph, mg_node_t **out_node,
                                          mg_error_t **out_error);
-/*
- * Adds a graph-owned workspace requirement node. The node encodes no public compute operation and
- * exists to reserve graph-exec-owned transient memory during instantiation. It is not patchable in
- * Phase 2 and does not expose arena offsets to callers.
- */
-MG_API mg_status_t mgGraphAddWorkspaceNode(mg_graph_t *graph, const mg_workspace_desc_t *desc,
-                                           mg_node_t **out_node, mg_error_t **out_error);
 MG_API mg_node_id_t mgNodeId(const mg_node_t *node);
 MG_API mg_status_t mgGraphAddDependency(mg_graph_t *graph, mg_node_t *before, mg_node_t *after,
                                         mg_error_t **out_error);

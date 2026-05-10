@@ -17,17 +17,19 @@ Public additions are intentionally small:
 
 - opaque `mg_arena_t`
 - `mg_arena_desc_t`
-- `mg_workspace_desc_t`
 - `mgArenaCreate`
 - `mgArenaDestroy`
 - `mgArenaSize`
 - `mgArenaAlignment`
 - `mgGraphSetArena`
-- `mgGraphAddWorkspaceNode`
 
 Workspace requirements are collected during `mgGraphInstantiate`. The graph exec owns the frozen
 workspace plan and the backend allocation used for relaunch. Destroying the source graph or
 caller-owned arena handle after successful instantiation does not invalidate the graph exec.
+
+Workspace requirement descriptors and workspace-only nodes remain internal in Phase 2. Public
+compute or binding APIs for arena-backed temporary resources are deferred until a user-facing node
+actually needs them.
 
 Phase 2 uses monotonic, non-overlapping workspace layout. Liveness-based aliasing is deliberately
 deferred until a later phase because compactness is less important than predictable correctness at
@@ -46,6 +48,9 @@ multi-GPU, or multi-queue execution.
 The GPU integration test uses an internal workspace-backed fill path to prove that planned
 workspace is allocated, GPU-visible, retained across launch, and reusable across relaunch. That
 internal path is not part of the public C ABI.
+
+The static archive still exposes internal `_mg_*` symbols. A public export list is deferred until a
+shared-library/release build needs that boundary.
 
 ## Ownership And Lifetime
 

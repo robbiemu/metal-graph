@@ -94,11 +94,10 @@ static void mg_exec_node_clear(mg_exec_node_t *node) {
     case MG_NODE_BARRIER:
         node->as.barrier_id = MG_NODE_ID_INVALID;
         break;
-    case MG_NODE_WORKSPACE:
-        memset(&node->as.workspace, 0, sizeof(node->as.workspace));
-        break;
     default:
-        if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
+        if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE) {
+            memset(&node->as.workspace, 0, sizeof(node->as.workspace));
+        } else if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
             mg_buffer_release(node->as.workspace_fill.dst);
             memset(&node->as.workspace_fill, 0, sizeof(node->as.workspace_fill));
         }
@@ -144,13 +143,14 @@ static mg_status_t mg_clone_exec_node(const mg_node_t *src, mg_exec_node_t *dst,
     case MG_NODE_BARRIER:
         dst->as.barrier_id = src->id;
         return MG_STATUS_OK;
-    case MG_NODE_WORKSPACE:
-        dst->as.workspace.id = src->id;
-        dst->as.workspace.size = src->as.workspace.size;
-        dst->as.workspace.alignment = src->as.workspace.alignment;
-        return mg_workspace_plan_offset_for_node(workspace, src->id, &dst->as.workspace.offset,
-                                                 out_error);
     default:
+        if ((int)src->kind == MG_NODE_INTERNAL_WORKSPACE) {
+            dst->as.workspace.id = src->id;
+            dst->as.workspace.size = src->as.workspace.size;
+            dst->as.workspace.alignment = src->as.workspace.alignment;
+            return mg_workspace_plan_offset_for_node(workspace, src->id, &dst->as.workspace.offset,
+                                                     out_error);
+        }
         if ((int)src->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
             dst->as.workspace_fill.id = src->id;
             dst->as.workspace_fill.size = src->as.workspace_fill.size;
@@ -676,9 +676,10 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
         }
         case MG_NODE_BARRIER:
             break;
-        case MG_NODE_WORKSPACE:
-            break;
         default:
+            if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE) {
+                break;
+            }
             if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
                 id<MTLBlitCommandEncoder> encoder = [commandBuffer blitCommandEncoder];
                 if (!encoder) {

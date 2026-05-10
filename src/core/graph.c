@@ -118,11 +118,10 @@ void mg_node_clear(mg_node_t *node) {
         break;
     case MG_NODE_BARRIER:
         break;
-    case MG_NODE_WORKSPACE:
-        memset(&node->as.workspace, 0, sizeof(node->as.workspace));
-        break;
     default:
-        if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
+        if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE) {
+            memset(&node->as.workspace, 0, sizeof(node->as.workspace));
+        } else if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
             mg_buffer_release(node->as.workspace_fill.dst);
             memset(&node->as.workspace_fill, 0, sizeof(node->as.workspace_fill));
         }
@@ -382,8 +381,8 @@ mg_status_t mgGraphAddBarrierNode(mg_graph_t *graph, mg_node_t **out_node, mg_er
     return MG_STATUS_OK;
 }
 
-mg_status_t mgGraphAddWorkspaceNode(mg_graph_t *graph, const mg_workspace_desc_t *desc,
-                                    mg_node_t **out_node, mg_error_t **out_error) {
+mg_status_t mg_internal_graph_add_workspace_node(mg_graph_t *graph, const mg_workspace_desc_t *desc,
+                                                 mg_node_t **out_node, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (out_node) {
         *out_node = NULL;
@@ -400,7 +399,8 @@ mg_status_t mgGraphAddWorkspaceNode(mg_graph_t *graph, const mg_workspace_desc_t
     }
 
     mg_node_t *node = NULL;
-    status = mg_graph_alloc_node(graph, MG_NODE_WORKSPACE, &node, out_error);
+    status =
+        mg_graph_alloc_node(graph, (mg_node_kind_t)MG_NODE_INTERNAL_WORKSPACE, &node, out_error);
     if (status != MG_STATUS_OK) {
         return status;
     }

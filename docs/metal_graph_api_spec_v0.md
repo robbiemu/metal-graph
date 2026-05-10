@@ -79,11 +79,13 @@ Phase 1 does not add arenas/heaps, patch/update semantics, indirect command buff
 Phase 2 adds conservative memory planning:
 
 - opaque `mg_arena_t` handles;
+- `mg_arena_desc_t` for arena capacity/alignment;
 - `mgArenaCreate`, `mgArenaDestroy`, `mgArenaSize`, and `mgArenaAlignment`;
-- `mgGraphSetArena` for attaching an optional caller-owned arena descriptor to a graph;
-- `mgGraphAddWorkspaceNode` for declaring graph-exec-owned transient workspace requirements.
+- `mgGraphSetArena` for attaching an optional caller-owned arena descriptor to a graph.
 
-Arena and workspace descriptors use the same public naming convention as prior phases: `mgCamelCase` functions, `mg_*_t` public types/descriptors, and `MG_UPPER_SNAKE_CASE` enums/constants.
+Workspace requirement descriptors and workspace-only nodes are internal in Phase 2. Public compute or binding APIs for arena-backed temporary resources are deferred until a user-facing node actually needs them.
+
+Arena descriptors use the same public naming convention as prior phases: `mgCamelCase` functions, `mg_*_t` public types/descriptors, and `MG_UPPER_SNAKE_CASE` enums/constants.
 
 Phase 2 does not expose Objective-C, Swift, C++, Metal framework types, `MTLHeap`, `MTLResidencySet`, ICBs, MPSGraph, MLX, Python, or Rust types in public headers.
 
@@ -93,7 +95,7 @@ Phase 2 does not expose Objective-C, Swift, C++, Metal framework types, `MTLHeap
 - Phase 2 uses monotonic, non-overlapping workspace layout. Liveness-based aliasing is reserved for a future optimization.
 - Arena layout and workspace offsets are not public and are not stable across instantiations.
 - Arena-backed memory has no caller-visible host pointer and cannot be accessed directly through the public C ABI.
-- Workspace nodes encode no public compute operation; they reserve graph-exec-owned transient memory.
+- Workspace-only nodes encode no public compute operation and are not public API in Phase 2.
 - `mg_graph_exec_t` owns or retains the workspace plan, arena descriptor reference, and backend workspace allocation required for relaunch.
 - Destroying the source graph or caller-owned arena handle after successful instantiation must not invalidate the graph exec.
 - Memory planning errors use `MG_ERROR_STAGE_PLAN_MEMORY`; backend workspace allocation failures use `MG_ERROR_STAGE_BACKEND_ALLOCATE`.
