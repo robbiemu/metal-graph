@@ -94,11 +94,20 @@ static void mg_exec_node_clear(mg_exec_node_t *node) {
     case MG_NODE_BARRIER:
         node->as.barrier_id = MG_NODE_ID_INVALID;
         break;
+    default:
+        if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE) {
+            memset(&node->as.workspace, 0, sizeof(node->as.workspace));
+        } else if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
+            mg_buffer_release(node->as.workspace_fill.dst);
+            memset(&node->as.workspace_fill, 0, sizeof(node->as.workspace_fill));
+        }
+        break;
     }
     memset(node, 0, sizeof(*node));
 }
 
 static mg_status_t mg_clone_exec_node(const mg_node_t *src, mg_exec_node_t *dst,
+                                      const mg_workspace_plan_t *workspace,
                                       mg_error_t **out_error) {
     memset(dst, 0, sizeof(*dst));
     dst->kind = src->kind;
@@ -134,10 +143,57 @@ static mg_status_t mg_clone_exec_node(const mg_node_t *src, mg_exec_node_t *dst,
     case MG_NODE_BARRIER:
         dst->as.barrier_id = src->id;
         return MG_STATUS_OK;
+    default:
+        if ((int)src->kind == MG_NODE_INTERNAL_WORKSPACE) {
+            dst->as.workspace.id = src->id;
+            dst->as.workspace.size = src->as.workspace.size;
+            dst->as.workspace.alignment = src->as.workspace.alignment;
+            return mg_workspace_plan_offset_for_node(workspace, src->id, &dst->as.workspace.offset,
+                                                     out_error);
+        }
+        if ((int)src->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
+            dst->as.workspace_fill.id = src->id;
+            dst->as.workspace_fill.size = src->as.workspace_fill.size;
+            dst->as.workspace_fill.alignment = src->as.workspace_fill.alignment;
+            dst->as.workspace_fill.value = src->as.workspace_fill.value;
+            dst->as.workspace_fill.dst = src->as.workspace_fill.dst;
+            dst->as.workspace_fill.dst_offset = src->as.workspace_fill.dst_offset;
+            mg_buffer_retain(dst->as.workspace_fill.dst);
+            return mg_workspace_plan_offset_for_node(workspace, src->id,
+                                                     &dst->as.workspace_fill.offset, out_error);
+        }
+        break;
     }
 
     return mg_set_error(out_error, MG_STATUS_INTERNAL_ERROR, MG_ERROR_STAGE_INSTANTIATE, src->id,
                         "unknown node kind", NULL);
+}
+
+static mg_status_t mg_workspace_allocate(mg_graph_exec_t *exec, id<MTLDevice> metalDevice,
+                                         mg_error_t **out_error) {
+    if (exec->workspace.total_size == 0) {
+        return MG_STATUS_OK;
+    }
+
+    id<MTLBuffer> workspace = [metalDevice newBufferWithLength:exec->workspace.total_size
+                                                       options:MTLResourceStorageModePrivate];
+    if (!workspace) {
+        return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_BACKEND_ALLOCATE,
+                            MG_NODE_ID_INVALID, "failed to allocate Metal workspace buffer", NULL);
+    }
+
+    exec->workspace.backend_impl = (__bridge_retained void *)workspace;
+    return MG_STATUS_OK;
+}
+
+static void mg_workspace_backend_destroy(mg_workspace_plan_t *workspace) {
+    if (!workspace || !workspace->backend_impl) {
+        return;
+    }
+
+    id workspaceObject = (__bridge_transfer id)workspace->backend_impl;
+    (void)workspaceObject;
+    workspace->backend_impl = NULL;
 }
 
 mg_status_t mgDeviceCreateSystemDefault(mg_device_t **out_device, mg_error_t **out_error) {
@@ -352,10 +408,18 @@ mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_
     }
 
     exec->node_count = graph->node_count;
+    status = mg_graph_plan_workspace(graph, order, &exec->workspace, out_error);
+    if (status != MG_STATUS_OK) {
+        free(order);
+        free(exec);
+        return status;
+    }
+
     if (exec->node_count > 0) {
         exec->nodes = (mg_exec_node_t *)calloc(exec->node_count, sizeof(*exec->nodes));
         if (!exec->nodes) {
             free(order);
+            mg_workspace_plan_clear(&exec->workspace);
             free(exec);
             return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
         }
@@ -363,10 +427,16 @@ mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_
 
     id<MTLDevice> metalDevice = (__bridge id<MTLDevice>)device->impl;
     exec->device_impl = (__bridge_retained void *)metalDevice;
+    status = mg_workspace_allocate(exec, metalDevice, out_error);
+    if (status != MG_STATUS_OK) {
+        free(order);
+        mgGraphExecDestroy(exec);
+        return status;
+    }
 
     for (size_t i = 0; i < exec->node_count; ++i) {
         mg_node_t *node = graph->nodes[order[i]];
-        status = mg_clone_exec_node(node, &exec->nodes[i], out_error);
+        status = mg_clone_exec_node(node, &exec->nodes[i], &exec->workspace, out_error);
         if (status != MG_STATUS_OK) {
             free(order);
             mgGraphExecDestroy(exec);
@@ -430,6 +500,9 @@ void mg_backend_graph_exec_destroy(mg_graph_exec_t *exec) {
         mg_exec_node_clear(&exec->nodes[i]);
     }
 
+    mg_workspace_backend_destroy(&exec->workspace);
+    mg_workspace_plan_clear(&exec->workspace);
+
     if (exec->device_impl) {
         id deviceObject = (__bridge_transfer id)exec->device_impl;
         (void)deviceObject;
@@ -486,6 +559,9 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
             retainedEventCount += 1;
             break;
         default:
+            if ((int)exec->nodes[i].kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
+                retainedCount += 1;
+            }
             break;
         }
     }
@@ -509,6 +585,10 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
     }
 
     launch->impl = (__bridge_retained void *)commandBuffer;
+    if (exec->workspace.backend_impl) {
+        id workspace = (__bridge id)exec->workspace.backend_impl;
+        launch->retained_workspace_impl = (__bridge_retained void *)workspace;
+    }
 
     for (size_t i = 0; i < exec->node_count; ++i) {
         mg_exec_node_t *node = &exec->nodes[i];
@@ -596,6 +676,38 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
         }
         case MG_NODE_BARRIER:
             break;
+        default:
+            if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE) {
+                break;
+            }
+            if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
+                id<MTLBlitCommandEncoder> encoder = [commandBuffer blitCommandEncoder];
+                if (!encoder) {
+                    mgLaunchDestroy(launch);
+                    return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE,
+                                        node->as.workspace_fill.id,
+                                        "failed to create Metal workspace blit encoder", NULL);
+                }
+
+                id<MTLBuffer> workspace = (__bridge id<MTLBuffer>)exec->workspace.backend_impl;
+                id<MTLBuffer> dst = (__bridge id<MTLBuffer>)node->as.workspace_fill.dst->impl;
+                NSRange range =
+                    NSMakeRange(node->as.workspace_fill.offset, node->as.workspace_fill.size);
+                [encoder fillBuffer:workspace range:range value:node->as.workspace_fill.value];
+                [encoder copyFromBuffer:workspace
+                           sourceOffset:node->as.workspace_fill.offset
+                               toBuffer:dst
+                      destinationOffset:node->as.workspace_fill.dst_offset
+                                   size:node->as.workspace_fill.size];
+                [encoder endEncoding];
+                mg_buffer_retain(node->as.workspace_fill.dst);
+                launch->retained_buffers[launch->retained_buffer_count++] =
+                    node->as.workspace_fill.dst;
+                break;
+            }
+            mgLaunchDestroy(launch);
+            return mg_set_error(out_error, MG_STATUS_INTERNAL_ERROR, MG_ERROR_STAGE_ENCODE,
+                                MG_NODE_ID_INVALID, "unknown executable node kind", NULL);
         }
     }
 
@@ -638,6 +750,11 @@ void mg_backend_launch_destroy(mg_launch_t *launch) {
         id commandBuffer = (__bridge_transfer id)launch->impl;
         (void)commandBuffer;
         launch->impl = NULL;
+    }
+    if (launch->retained_workspace_impl) {
+        id workspace = (__bridge_transfer id)launch->retained_workspace_impl;
+        (void)workspace;
+        launch->retained_workspace_impl = NULL;
     }
 }
 

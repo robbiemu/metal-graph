@@ -4,7 +4,7 @@ This file tracks unresolved design questions first, then records resolved decisi
 
 ## Current Open Questions
 
-There are no currently tracked open questions for Phase 0 or Phase 1.
+There are no currently tracked open questions for Phase 0, Phase 1, or Phase 2.
 
 When new questions arise, add them here with:
 
@@ -52,7 +52,7 @@ v1 uses public create/destroy ownership. Public retain/release APIs are intentio
 
 After successful instantiation, `mg_graph_exec_t` owns a frozen executable copy and must not depend on mutable graph storage, caller-owned descriptor memory, temporary arrays, or user-facing handle objects that may be destroyed after instantiation.
 
-Graph execs must retain or copy resources needed for relaunch, including cloned node descriptors, backend pipelines/plans, buffers, and events. Destroying a graph after successful instantiation must not invalidate the exec. Destroying user-facing buffer or event handles after successful instantiation must not invalidate the exec.
+Graph execs must retain or copy resources needed for relaunch, including cloned node descriptors, backend pipelines/plans, buffers, events, arena descriptors, and workspace allocations. Destroying a graph after successful instantiation must not invalidate the exec. Destroying user-facing buffer, event, or arena handles after successful instantiation must not invalidate the exec.
 
 Launches must retain backend resources required by submitted command buffers until completion, but this does not make destroying an in-flight exec or stream valid in v1. Callers must synchronize before destroying graph execs or streams involved in a launch.
 

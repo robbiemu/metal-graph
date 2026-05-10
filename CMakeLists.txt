@@ -16,6 +16,7 @@ if(APPLE)
 endif()
 
 add_library(metal_graph STATIC
+  src/core/arena.c
   src/core/buffer.c
   src/core/error.c
   src/core/graph.c

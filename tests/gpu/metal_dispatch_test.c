@@ -1,3 +1,4 @@
+#include "../../src/core/internal.h"
 #include "metal_graph/metal_graph.h"
 
 #include <stdint.h>
@@ -80,7 +81,9 @@ int main(void) {
     mg_buffer_t *dst_buffer = NULL;
     mg_buffer_t *src_buffer = NULL;
     mg_buffer_t *fill_buffer = NULL;
+    mg_buffer_t *workspace_buffer = NULL;
     mg_event_t *event = NULL;
+    mg_arena_t *arena = NULL;
     mg_graph_t *graph = NULL;
     mg_graph_exec_t *exec = NULL;
     mg_launch_t *launch = NULL;
@@ -102,14 +105,17 @@ int main(void) {
         expect_status(mgBufferCreateShared(device, sizeof(uint32_t) * 4, &src_buffer, &error),
                       MG_STATUS_OK, "create source buffer", &error) ||
         expect_status(mgBufferCreateShared(device, 8, &fill_buffer, &error), MG_STATUS_OK,
-                      "create fill buffer", &error)) {
+                      "create fill buffer", &error) ||
+        expect_status(mgBufferCreateShared(device, 8, &workspace_buffer, &error), MG_STATUS_OK,
+                      "create workspace output buffer", &error)) {
         goto cleanup;
     }
 
     uint32_t *dst_values = (uint32_t *)mgBufferContents(dst_buffer);
     uint32_t *src_values = (uint32_t *)mgBufferContents(src_buffer);
     uint8_t *fill_values = (uint8_t *)mgBufferContents(fill_buffer);
-    if (!dst_values || !src_values || !fill_values) {
+    uint8_t *workspace_values = (uint8_t *)mgBufferContents(workspace_buffer);
+    if (!dst_values || !src_values || !fill_values || !workspace_values) {
         fprintf(stderr, "shared buffer contents are unavailable\n");
         goto cleanup;
     }
@@ -221,16 +227,116 @@ int main(void) {
     mgGraphDestroy(graph);
     graph = NULL;
 
+    mg_arena_desc_t invalid_arena_desc;
+    memset(&invalid_arena_desc, 0, sizeof(invalid_arena_desc));
+    invalid_arena_desc.size = sizeof(invalid_arena_desc);
+    invalid_arena_desc.byte_count = 64;
+    invalid_arena_desc.alignment = 3;
+    if (expect_status(mgArenaCreate(device, &invalid_arena_desc, &arena, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject invalid arena alignment", &error)) {
+        goto cleanup;
+    }
+
+    mg_graph_t *small_arena_graph = NULL;
+    mg_graph_exec_t *small_arena_exec = NULL;
+    mg_arena_t *small_arena = NULL;
+    mg_node_t *workspace_test_node = NULL;
+    mg_arena_desc_t small_arena_desc;
+    memset(&small_arena_desc, 0, sizeof(small_arena_desc));
+    small_arena_desc.size = sizeof(small_arena_desc);
+    small_arena_desc.byte_count = 32;
+    small_arena_desc.alignment = 16;
+    mg_workspace_desc_t too_large_workspace;
+    memset(&too_large_workspace, 0, sizeof(too_large_workspace));
+    too_large_workspace.size = sizeof(too_large_workspace);
+    too_large_workspace.byte_count = 64;
+    too_large_workspace.alignment = 16;
+    if (expect_status(mgArenaCreate(device, &small_arena_desc, &small_arena, &error), MG_STATUS_OK,
+                      "create small arena", &error) ||
+        expect_status(mgGraphCreate(&small_arena_graph, &error), MG_STATUS_OK,
+                      "create small arena graph", &error) ||
+        expect_status(mgGraphSetArena(small_arena_graph, small_arena, &error), MG_STATUS_OK,
+                      "set small arena", &error) ||
+        expect_status(mg_internal_graph_add_workspace_node(small_arena_graph, &too_large_workspace,
+                                                           &workspace_test_node, &error),
+                      MG_STATUS_OK, "add oversized workspace", &error)) {
+        mgArenaDestroy(small_arena);
+        mgGraphDestroy(small_arena_graph);
+        goto cleanup;
+    }
+    status = mgGraphInstantiate(small_arena_graph, device, &small_arena_exec, &error);
+    mgArenaDestroy(small_arena);
+    mgGraphDestroy(small_arena_graph);
+    if (status != MG_STATUS_INVALID_ARGUMENT || mgErrorStage(error) != MG_ERROR_STAGE_PLAN_MEMORY) {
+        if (status == MG_STATUS_OK) {
+            mgGraphExecDestroy(small_arena_exec);
+        }
+        print_error("instantiate oversized workspace should fail planning", status, error);
+        error = NULL;
+        goto cleanup;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    mg_graph_t *overflow_graph = NULL;
+    mg_graph_exec_t *overflow_exec = NULL;
+    mg_workspace_desc_t huge_workspace;
+    memset(&huge_workspace, 0, sizeof(huge_workspace));
+    huge_workspace.size = sizeof(huge_workspace);
+    huge_workspace.byte_count = SIZE_MAX;
+    huge_workspace.alignment = 1;
+    mg_workspace_desc_t one_byte_workspace;
+    memset(&one_byte_workspace, 0, sizeof(one_byte_workspace));
+    one_byte_workspace.size = sizeof(one_byte_workspace);
+    one_byte_workspace.byte_count = 1;
+    one_byte_workspace.alignment = 1;
+    if (expect_status(mgGraphCreate(&overflow_graph, &error), MG_STATUS_OK, "create overflow graph",
+                      &error) ||
+        expect_status(mg_internal_graph_add_workspace_node(overflow_graph, &huge_workspace,
+                                                           &workspace_test_node, &error),
+                      MG_STATUS_OK, "add huge workspace", &error) ||
+        expect_status(mg_internal_graph_add_workspace_node(overflow_graph, &one_byte_workspace,
+                                                           &workspace_test_node, &error),
+                      MG_STATUS_OK, "add overflow workspace", &error)) {
+        mgGraphDestroy(overflow_graph);
+        goto cleanup;
+    }
+    status = mgGraphInstantiate(overflow_graph, device, &overflow_exec, &error);
+    mgGraphDestroy(overflow_graph);
+    if (status != MG_STATUS_INVALID_ARGUMENT || mgErrorStage(error) != MG_ERROR_STAGE_PLAN_MEMORY) {
+        if (status == MG_STATUS_OK) {
+            mgGraphExecDestroy(overflow_exec);
+        }
+        print_error("instantiate workspace overflow should fail planning", status, error);
+        error = NULL;
+        goto cleanup;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
     src_values[0] = 100;
     src_values[1] = 200;
     src_values[2] = 300;
     src_values[3] = 400;
     memset(dst_values, 0, sizeof(uint32_t) * 4);
     memset(fill_values, 0, 8);
+    memset(workspace_values, 0, 8);
+
+    mg_arena_desc_t arena_desc;
+    memset(&arena_desc, 0, sizeof(arena_desc));
+    arena_desc.size = sizeof(arena_desc);
+    arena_desc.byte_count = 128;
+    arena_desc.alignment = 16;
+    if (expect_status(mgArenaCreate(device, &arena_desc, &arena, &error), MG_STATUS_OK,
+                      "create arena", &error)) {
+        goto cleanup;
+    }
 
     mg_node_t *wait_node = NULL;
     mg_node_t *copy_node = NULL;
     mg_node_t *fill_node = NULL;
+    mg_node_t *workspace_node = NULL;
+    mg_node_t *workspace_fill_node = NULL;
     mg_node_t *barrier_node = NULL;
     mg_node_t *dispatch_node = NULL;
     mg_node_t *signal_node = NULL;
@@ -246,14 +352,32 @@ int main(void) {
     fill_desc.dst = fill_buffer;
     fill_desc.byte_count = 8;
     fill_desc.value = 0xAB;
+    mg_workspace_desc_t workspace_desc;
+    memset(&workspace_desc, 0, sizeof(workspace_desc));
+    workspace_desc.size = sizeof(workspace_desc);
+    workspace_desc.byte_count = 16;
+    workspace_desc.alignment = 16;
+    mg_workspace_desc_t workspace_fill_desc;
+    memset(&workspace_fill_desc, 0, sizeof(workspace_fill_desc));
+    workspace_fill_desc.size = sizeof(workspace_fill_desc);
+    workspace_fill_desc.byte_count = 8;
+    workspace_fill_desc.alignment = 16;
 
     if (expect_status(mgGraphCreate(&graph, &error), MG_STATUS_OK, "create phase1 graph", &error) ||
+        expect_status(mgGraphSetArena(graph, arena, &error), MG_STATUS_OK, "set arena", &error) ||
         expect_status(mgGraphAddEventWaitNode(graph, event, 0, &wait_node, &error), MG_STATUS_OK,
                       "add event wait", &error) ||
         expect_status(mgGraphAddCopyNode(graph, &copy_desc, &copy_node, &error), MG_STATUS_OK,
                       "add copy", &error) ||
         expect_status(mgGraphAddFillNode(graph, &fill_desc, &fill_node, &error), MG_STATUS_OK,
                       "add fill", &error) ||
+        expect_status(
+            mg_internal_graph_add_workspace_node(graph, &workspace_desc, &workspace_node, &error),
+            MG_STATUS_OK, "add workspace node", &error) ||
+        expect_status(mg_internal_graph_add_workspace_fill_node(graph, &workspace_fill_desc, 0xCD,
+                                                                workspace_buffer, 0,
+                                                                &workspace_fill_node, &error),
+                      MG_STATUS_OK, "add internal workspace fill", &error) ||
         expect_status(mgGraphAddBarrierNode(graph, &barrier_node, &error), MG_STATUS_OK,
                       "add barrier", &error) ||
         expect_status(mgGraphAddDispatchNode(graph, &dispatch_desc, &dispatch_node, &error),
@@ -264,10 +388,16 @@ int main(void) {
                       "add wait-copy dependency", &error) ||
         expect_status(mgGraphAddDependency(graph, wait_node, fill_node, &error), MG_STATUS_OK,
                       "add wait-fill dependency", &error) ||
+        expect_status(mgGraphAddDependency(graph, wait_node, workspace_node, &error), MG_STATUS_OK,
+                      "add wait-workspace dependency", &error) ||
+        expect_status(mgGraphAddDependency(graph, workspace_node, workspace_fill_node, &error),
+                      MG_STATUS_OK, "add workspace-fill dependency", &error) ||
         expect_status(mgGraphAddDependency(graph, copy_node, barrier_node, &error), MG_STATUS_OK,
                       "add copy-barrier dependency", &error) ||
         expect_status(mgGraphAddDependency(graph, fill_node, barrier_node, &error), MG_STATUS_OK,
                       "add fill-barrier dependency", &error) ||
+        expect_status(mgGraphAddDependency(graph, workspace_fill_node, barrier_node, &error),
+                      MG_STATUS_OK, "add workspace-barrier dependency", &error) ||
         expect_status(mgGraphAddDependency(graph, barrier_node, dispatch_node, &error),
                       MG_STATUS_OK, "add barrier-dispatch dependency", &error) ||
         expect_status(mgGraphAddDependency(graph, dispatch_node, signal_node, &error), MG_STATUS_OK,
@@ -278,8 +408,12 @@ int main(void) {
     }
     mgGraphDestroy(graph);
     graph = NULL;
+    mgArenaDestroy(arena);
+    arena = NULL;
     mgEventDestroy(event);
     event = NULL;
+    mgBufferDestroy(workspace_buffer);
+    workspace_buffer = NULL;
     mgBufferDestroy(fill_buffer);
     fill_buffer = NULL;
     mgBufferDestroy(src_buffer);
@@ -296,7 +430,8 @@ int main(void) {
     mgLaunchDestroy(launch);
     launch = NULL;
     if (check_values(dst_values, 101, 201, 301, 401, "phase1 first launch") ||
-        check_fill(fill_values, 0xAB, "phase1 first fill")) {
+        check_fill(fill_values, 0xAB, "phase1 first fill") ||
+        check_fill(workspace_values, 0xCD, "phase2 first workspace fill")) {
         goto cleanup;
     }
 
@@ -306,6 +441,7 @@ int main(void) {
     src_values[3] = 10;
     memset(dst_values, 0, sizeof(uint32_t) * 4);
     memset(fill_values, 0, 8);
+    memset(workspace_values, 0, 8);
     if (expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
                       "relaunch phase1 graph", &error) ||
         expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK, "sync phase1 relaunch",
@@ -313,7 +449,8 @@ int main(void) {
         goto cleanup;
     }
     if (check_values(dst_values, 8, 9, 10, 11, "phase1 relaunch") ||
-        check_fill(fill_values, 0xAB, "phase1 relaunch fill")) {
+        check_fill(fill_values, 0xAB, "phase1 relaunch fill") ||
+        check_fill(workspace_values, 0xCD, "phase2 relaunch workspace fill")) {
         goto cleanup;
     }
 
@@ -323,7 +460,9 @@ cleanup:
     mgLaunchDestroy(launch);
     mgGraphExecDestroy(exec);
     mgGraphDestroy(graph);
+    mgArenaDestroy(arena);
     mgEventDestroy(event);
+    mgBufferDestroy(workspace_buffer);
     mgBufferDestroy(fill_buffer);
     mgBufferDestroy(src_buffer);
     mgBufferDestroy(dst_buffer);
