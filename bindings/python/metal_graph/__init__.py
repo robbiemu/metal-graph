@@ -9,6 +9,7 @@ from __future__ import annotations
 import ctypes
 import os
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 MG_STATUS_OK = 0
@@ -49,7 +50,20 @@ class MetalGraphError(RuntimeError):
 
 
 class UnsupportedWorkflowError(MetalGraphError):
-    """Raised when a Python/MLX adapter workflow is outside Phase 6 scope."""
+    """Raised when a Python/MLX adapter workflow is unsupported or unsafe."""
+
+
+@dataclass(frozen=True)
+class MlxImportSupport:
+    """Result of checking whether an MLX array can be imported."""
+
+    supported: bool
+    mode: str
+    shared_storage: bool
+    reason: str
+
+    def __bool__(self) -> bool:
+        return self.supported
 
 
 class _Version(ctypes.Structure):
@@ -311,6 +325,19 @@ class Stream(_Handle):
 class Buffer(_Handle):
     _destroy = "mgBufferDestroy"
 
+    def __init__(
+        self,
+        handle: int | ctypes.c_void_p,
+        *,
+        source_owner=None,
+        import_mode: str = "metal_graph",
+        shared_storage: bool = False,
+    ) -> None:
+        super().__init__(handle)
+        self._source_owner = source_owner
+        self._import_mode = import_mode
+        self._shared_storage = shared_storage
+
     @classmethod
     def shared(cls, device: Device, length: int) -> Buffer:
         out = ctypes.c_void_p()
@@ -342,12 +369,27 @@ class Buffer(_Handle):
             raise ValueError("values do not fit in buffer")
         ctypes.memmove(self._contents(), ctypes.addressof(array), byte_count)
 
+    def write_bytes(self, values: bytes | bytearray | memoryview) -> None:
+        view = memoryview(values).cast("B")
+        if view.nbytes > self.length:
+            raise ValueError("values do not fit in buffer")
+        payload = bytes(view)
+        ctypes.memmove(self._contents(), payload, len(payload))
+
     def read_uint32s(self, count: int) -> list[int]:
         byte_count = ctypes.sizeof(ctypes.c_uint32) * count
         if byte_count > self.length:
             raise ValueError("read exceeds buffer length")
         array_type = ctypes.c_uint32 * count
         return list(array_type.from_address(self._contents()))
+
+    @property
+    def import_mode(self) -> str:
+        return self._import_mode
+
+    @property
+    def is_zero_copy(self) -> bool:
+        return self._shared_storage
 
 
 class Node:
@@ -453,13 +495,119 @@ def mlx_available() -> bool:
     return True
 
 
-def from_mlx_array(_array) -> Buffer:
-    raise UnsupportedWorkflowError(
-        MG_STATUS_UNSUPPORTED,
-        message=(
-            "MLX array zero-copy import is not supported in Phase 6. "
-            "Use Metal Graph-owned shared buffers through the Python adapter."
-        ),
+_ZERO_COPY_UNSUPPORTED_REASON = (
+    "MLX array zero-copy import is unsupported because the public MLX Python API exposes "
+    "array metadata and Python buffer/DLPack conversion, but not a stable Metal buffer, byte "
+    "offset, byte range, or device identity that Metal Graph can retain and validate safely."
+)
+
+
+def _memoryview_for_explicit_copy(array) -> memoryview:
+    try:
+        view = memoryview(array)
+    except TypeError as exc:
+        raise UnsupportedWorkflowError(
+            MG_STATUS_UNSUPPORTED,
+            message=(
+                "mode='copy' requires an MLX array or another object exposing the Python "
+                "buffer protocol"
+            ),
+        ) from exc
+
+    if view.nbytes == 0:
+        raise MetalGraphError(
+            MG_STATUS_INVALID_ARGUMENT,
+            message="mode='copy' requires a non-empty source buffer",
+        )
+    if not view.contiguous or not view.c_contiguous:
+        raise UnsupportedWorkflowError(
+            MG_STATUS_UNSUPPORTED,
+            message="mode='copy' requires a contiguous source buffer",
+        )
+    return view.cast("B")
+
+
+def can_import_mlx_array(array, *, mode: str = "zero_copy") -> MlxImportSupport:
+    """Return whether the adapter can import an MLX array for the requested mode."""
+
+    if mode == "zero_copy":
+        reason = _ZERO_COPY_UNSUPPORTED_REASON
+        if not mlx_available():
+            reason = "MLX is not installed; zero-copy MLX import cannot be evaluated."
+        return MlxImportSupport(
+            supported=False,
+            mode=mode,
+            shared_storage=False,
+            reason=reason,
+        )
+
+    if mode == "copy":
+        try:
+            _memoryview_for_explicit_copy(array)
+        except MetalGraphError as exc:
+            return MlxImportSupport(
+                supported=False,
+                mode=mode,
+                shared_storage=False,
+                reason=str(exc),
+            )
+        return MlxImportSupport(
+            supported=True,
+            mode=mode,
+            shared_storage=False,
+            reason="explicit copy import is available through the Python buffer protocol",
+        )
+
+    raise ValueError("mode must be 'zero_copy' or 'copy'")
+
+
+def import_mlx_array(array, *, mode: str = "zero_copy", device: Device | None = None) -> Buffer:
+    """Import an MLX array into a Metal Graph buffer wrapper.
+
+    ``mode='zero_copy'`` requires shared storage and is rejected until MLX exposes a stable public
+    Metal storage handle that Metal Graph can validate. ``mode='copy'`` is an explicit copy into a
+    Metal Graph-owned shared buffer and does not provide shared MLX visibility.
+    """
+
+    if mode == "zero_copy":
+        raise UnsupportedWorkflowError(
+            MG_STATUS_UNSUPPORTED,
+            message=_ZERO_COPY_UNSUPPORTED_REASON,
+        )
+
+    if mode != "copy":
+        raise ValueError("mode must be 'zero_copy' or 'copy'")
+
+    if device is None:
+        raise ValueError("mode='copy' requires device=Device.system_default() or another Device")
+
+    source = _memoryview_for_explicit_copy(array)
+    buffer = Buffer.shared(device, source.nbytes)
+    try:
+        buffer.write_bytes(source)
+    except Exception:
+        buffer.close()
+        raise
+    buffer._source_owner = array
+    buffer._import_mode = "copy"
+    buffer._shared_storage = False
+    return buffer
+
+
+def from_mlx_array(array, *, mode: str = "zero_copy", device: Device | None = None) -> Buffer:
+    """Backward-compatible alias for :func:`import_mlx_array`."""
+
+    return import_mlx_array(array, mode=mode, device=device)
+
+
+def mlx_zero_copy_status() -> MlxImportSupport:
+    """Return the repository's current zero-copy MLX import status."""
+
+    return MlxImportSupport(
+        supported=False,
+        mode="zero_copy",
+        shared_storage=False,
+        reason=_ZERO_COPY_UNSUPPORTED_REASON,
     )
 
 
@@ -470,11 +618,15 @@ __all__ = [
     "GraphExec",
     "Launch",
     "MetalGraphError",
+    "MlxImportSupport",
     "Node",
     "Stream",
     "UnsupportedWorkflowError",
+    "can_import_mlx_array",
     "from_mlx_array",
+    "import_mlx_array",
     "mlx_available",
+    "mlx_zero_copy_status",
     "status_string",
     "version",
     "version_string",

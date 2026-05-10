@@ -1,0 +1,8 @@
+{
+  "status": "unsupported_public_api",
+  "zero_copy_supported": false,
+  "explicit_copy_supported": true,
+  "shared_storage_verified": false,
+  "positive_zero_copy_workflow_ran": false,
+  "reason": "Public MLX Python APIs expose array metadata and buffer/DLPack conversion, but not a stable Metal buffer, byte range, and device identity that Metal Graph can retain and validate."
+}
