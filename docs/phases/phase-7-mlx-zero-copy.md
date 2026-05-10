@@ -140,3 +140,20 @@ Phase 10 does not, by itself, make MLX zero-copy supported. The MLX adapter must
 proves storage identity, byte range, device identity, lifetime ownership, layout, dtype, and
 synchronization safety. Explicit `mode="copy"` remains a copy path and must report
 `is_zero_copy == False`.
+
+## Phase 11 Result
+
+Phase 11 evaluated the bridge from MLX arrays to the Phase 10 external Metal wrapper. No supported
+public MLX Python export or maintained in-repository shim currently provides the required
+`MTLBuffer`, byte range, device identity, lifetime, and synchronization facts.
+
+The Phase 7 unsupported result therefore remains correct:
+
+```text
+status = unsupported_public_api
+```
+
+The adapter now reports richer diagnostics for that result, including selected mode `reject`,
+`shared_storage_verified = false`, `copy_bytes = 0`, and fallback reason
+`unsupported_public_api`. Explicit copy remains independent storage and reports adapter copy
+diagnostics.

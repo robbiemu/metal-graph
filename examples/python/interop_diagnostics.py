@@ -22,12 +22,15 @@ def main() -> int:
     print(f"  path={zero_copy.diagnostic.path}")
     print(f"  reason={zero_copy.diagnostic.reason}")
     print(f"  is_zero_copy={zero_copy.diagnostic.is_zero_copy}")
+    print(f"  shared_storage_verified={zero_copy.diagnostic.shared_storage_verified}")
+    print(f"  selected_mode={zero_copy.diagnostic.selected_mode}")
 
     copy_support = mg.can_import_mlx_array(bytearray((1, 2, 3, 4)), mode="copy")
     print("explicit copy:")
     print(f"  status={copy_support.status}")
     print(f"  path={copy_support.diagnostic.path}")
     print(f"  is_zero_copy={copy_support.diagnostic.is_zero_copy}")
+    print(f"  copy_bytes={copy_support.diagnostic.copy_bytes}")
     return 0
 
 

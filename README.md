@@ -110,6 +110,11 @@ The core `metal_graph.h` header remains framework-neutral. External wraps can be
 `mgBufferGetOriginInfo`; MLX zero-copy remains unsupported until a later phase proves a supported
 MLX storage export path or supported shim.
 
+Phase 11 keeps MLX zero-copy in the `unsupported_public_api` state because the public MLX Python
+surface does not currently document a stable Metal buffer, byte range, device identity, and lifetime
+export that can feed `mgMetalBufferWrap`. The Python adapter reports this as a rejected zero-copy
+path, while explicit `mode="copy"` remains available and is labeled as an adapter copy.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
