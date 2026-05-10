@@ -46,6 +46,17 @@ void *mg_backend_buffer_contents(mg_buffer_t *buffer) {
     return NULL;
 }
 
+mg_status_t mg_event_create(mg_device_t *device, mg_event_t **out_event, mg_error_t **out_error) {
+    (void)device;
+    if (out_event) {
+        *out_event = NULL;
+    }
+    return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_CREATE, MG_NODE_ID_INVALID,
+                        "Metal shared events are only available on Apple platforms", NULL);
+}
+
+void mg_backend_event_destroy(mg_event_t *event) { (void)event; }
+
 mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_exec_t **out_exec,
                                  mg_error_t **out_error) {
     (void)graph;

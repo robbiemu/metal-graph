@@ -51,4 +51,20 @@ Phase 0 must not expose Objective-C, Swift, C++ STL, Metal framework types, indi
 
 ## Future Phases
 
-Later phases may add copy/fill/event/barrier nodes, arenas/heaps, patch/update semantics, indirect command buffer optimization, MPSGraph nodes, and MLX/Python adapters. Those capabilities must remain out of the Phase 0 public API.
+## Phase 1 Public Surface
+
+Phase 1 adds:
+
+- copy nodes;
+- 8-bit fill nodes;
+- timeline event creation/destruction;
+- event wait/signal nodes;
+- conservative barrier nodes.
+
+Phase 1 remains single-device and single-queue oriented. Events are backed by `MTLSharedEvent` on Apple platforms. Barrier nodes preserve graph ordering but do not claim full multi-queue or cross-encoder hazard semantics.
+
+Phase 1 does not add arenas/heaps, patch/update semantics, indirect command buffer optimization, MPSGraph nodes, MLX, Python bindings, Swift wrappers, or Rust bindings.
+
+## Future Phases
+
+Later phases may add arenas/heaps, patch/update semantics, indirect command buffer optimization, MPSGraph nodes, and MLX/Python adapters.

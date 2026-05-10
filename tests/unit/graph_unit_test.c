@@ -47,14 +47,85 @@ int main(void) {
         return 3;
     }
 
+    mg_node_t *invalid = NULL;
+    if (expect_status(mg_graph_add_copy_node(graph, NULL, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject null copy descriptor")) {
+        mg_error_destroy(error);
+        mg_graph_destroy(graph);
+        return 4;
+    }
+    mg_error_destroy(error);
+    error = NULL;
+
+    mg_copy_desc_t invalid_copy;
+    memset(&invalid_copy, 0, sizeof(invalid_copy));
+    invalid_copy.size = sizeof(invalid_copy);
+    invalid_copy.byte_count = 1;
+    if (expect_status(mg_graph_add_copy_node(graph, &invalid_copy, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject invalid copy descriptor")) {
+        mg_error_destroy(error);
+        mg_graph_destroy(graph);
+        return 5;
+    }
+    mg_error_destroy(error);
+    error = NULL;
+
+    if (expect_status(mg_graph_add_fill_node(graph, NULL, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject null fill descriptor")) {
+        mg_error_destroy(error);
+        mg_graph_destroy(graph);
+        return 6;
+    }
+    mg_error_destroy(error);
+    error = NULL;
+
+    mg_fill_desc_t invalid_fill;
+    memset(&invalid_fill, 0, sizeof(invalid_fill));
+    invalid_fill.size = sizeof(invalid_fill);
+    invalid_fill.byte_count = 1;
+    if (expect_status(mg_graph_add_fill_node(graph, &invalid_fill, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject invalid fill descriptor")) {
+        mg_error_destroy(error);
+        mg_graph_destroy(graph);
+        return 7;
+    }
+    mg_error_destroy(error);
+    error = NULL;
+
+    if (expect_status(mg_graph_add_event_wait_node(graph, NULL, 1, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject null event wait")) {
+        mg_error_destroy(error);
+        mg_graph_destroy(graph);
+        return 8;
+    }
+    mg_error_destroy(error);
+    error = NULL;
+
+    if (expect_status(mg_graph_add_event_signal_node(graph, NULL, 1, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject null event signal")) {
+        mg_error_destroy(error);
+        mg_graph_destroy(graph);
+        return 9;
+    }
+    mg_error_destroy(error);
+    error = NULL;
+
+    if (expect_status(mg_graph_add_barrier_node(NULL, &invalid, &error), MG_STATUS_INVALID_ARGUMENT,
+                      "reject null barrier graph")) {
+        mg_error_destroy(error);
+        mg_graph_destroy(graph);
+        return 10;
+    }
+    mg_error_destroy(error);
+    error = NULL;
+
     mg_dispatch_desc_t invalid_desc = test_dispatch_desc();
     invalid_desc.size = 0;
-    mg_node_t *invalid = NULL;
     if (expect_status(mg_graph_add_dispatch_node(graph, &invalid_desc, &invalid, &error),
                       MG_STATUS_INVALID_ARGUMENT, "reject short dispatch descriptor")) {
         mg_error_destroy(error);
         mg_graph_destroy(graph);
-        return 4;
+        return 11;
     }
     mg_error_destroy(error);
     error = NULL;
@@ -67,7 +138,7 @@ int main(void) {
                       MG_STATUS_INVALID_ARGUMENT, "reject invalid buffer binding")) {
         mg_error_destroy(error);
         mg_graph_destroy(graph);
-        return 5;
+        return 12;
     }
     mg_error_destroy(error);
     error = NULL;
@@ -80,20 +151,20 @@ int main(void) {
         expect_status(mg_graph_add_dispatch_node(graph, &desc, &second, &error), MG_STATUS_OK,
                       "add second node")) {
         mg_graph_destroy(graph);
-        return 6;
+        return 13;
     }
 
     if (mg_node_id(first) == MG_NODE_ID_INVALID || mg_node_id(second) == MG_NODE_ID_INVALID) {
         fprintf(stderr, "node ids should be valid\n");
         mg_graph_destroy(graph);
-        return 7;
+        return 14;
     }
 
     if (expect_status(mg_graph_add_dependency(graph, first, first, &error),
                       MG_STATUS_INVALID_TOPOLOGY, "reject self dependency")) {
         mg_error_destroy(error);
         mg_graph_destroy(graph);
-        return 8;
+        return 15;
     }
     mg_error_destroy(error);
     error = NULL;
@@ -104,27 +175,27 @@ int main(void) {
                       "ignore duplicate dependency") ||
         expect_status(mg_graph_validate(graph, &error), MG_STATUS_OK, "validate acyclic graph")) {
         mg_graph_destroy(graph);
-        return 9;
+        return 16;
     }
 
     mg_status_t cycle_status = mg_graph_add_dependency(graph, second, first, &error);
     if (expect_status(cycle_status, MG_STATUS_OK, "add cycle edge")) {
         mg_graph_destroy(graph);
-        return 10;
+        return 17;
     }
 
     cycle_status = mg_graph_validate(graph, &error);
     if (expect_status(cycle_status, MG_STATUS_INVALID_TOPOLOGY, "validate cyclic graph")) {
         mg_error_destroy(error);
         mg_graph_destroy(graph);
-        return 11;
+        return 18;
     }
 
     if (mg_error_stage(error) != MG_ERROR_STAGE_VALIDATE) {
         fprintf(stderr, "cycle error should come from validate stage\n");
         mg_error_destroy(error);
         mg_graph_destroy(graph);
-        return 12;
+        return 19;
     }
 
     mg_error_destroy(error);
