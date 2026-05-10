@@ -208,9 +208,9 @@ Decision:
 
 Future work:
 
+- broaden mixed-node coverage beyond the initial raw-dispatch/MPSGraph/raw-dispatch path;
 - define the minimal C ABI boundary for importing or describing MPSGraph executables;
 - decide whether native MPSGraph objects live behind an Objective-C extension header rather than
   the core public C header;
 - clarify supported shape/dtype/layout compatibility rules;
 - document how MPSGraph node errors map into Metal Graph error reporting;
-- test that MPSGraph nodes force ICB fallback and do not disturb direct raw Metal execution.

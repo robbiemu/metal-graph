@@ -231,7 +231,7 @@ MPSGraph nodes force direct encoding/ICB fallback. The initial backend may conse
 command buffers around MPSGraph nodes and synchronize prior raw Metal work before encoding an
 MPSGraph executable. This is a correctness choice for Phase 5, not a long-term performance claim.
 
-Future Phase 5 design work includes defining the minimal C ABI boundary for importing or describing
-MPSGraph executables, shape/dtype/layout compatibility rules, MPSGraph-to-`mg_error_t` error
-mapping, and tests proving MPSGraph nodes force ICB fallback without disturbing direct raw Metal
-execution.
+Future Phase 5 design work includes defining broader import/description boundaries for MPSGraph
+executables, richer shape/dtype/layout compatibility rules, MPSGraph-to-`mg_error_t` error mapping,
+and broader mixed-node conformance coverage beyond the initial raw-dispatch/MPSGraph/raw-dispatch
+path.

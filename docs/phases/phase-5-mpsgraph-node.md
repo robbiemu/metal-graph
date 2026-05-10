@@ -2,13 +2,14 @@
 
 Branch: `phase-5-mpsgraph-node`
 
-Status: planned
+Status: implemented
 
 ## Scope
 
 - Add optional MPSGraph tensor-subgraph island support.
 - Define feature gates and validation failures for unsupported platforms.
-- Add integration tests for dependency, event, command-buffer, and fallback interaction.
+- Add integration tests for dependency ordering, command-buffer segmentation, and fallback
+  interaction.
 
 Phase 5 is interoperability between MPSGraph and the Metal Graph runtime. Metal Graph remains the
 outer execution-orchestration layer:
@@ -90,6 +91,7 @@ deeper MPSGraph hazard and command-buffer integration is specified.
 
 ## Future Work
 
+- Broaden mixed-node coverage beyond the initial raw-dispatch/MPSGraph/raw-dispatch path.
 - Define the minimal C ABI boundary for importing or describing MPSGraph executables.
 - Decide whether native MPSGraph objects live behind an Objective-C extension header rather than
   the core public C header.

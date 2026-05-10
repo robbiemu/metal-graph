@@ -149,5 +149,13 @@ if(BUILD_TESTING)
     else()
       message(WARNING "Metal Toolchain is unavailable; skipping Metal GPU integration test target")
     endif()
+
+    if(NOT MG_HAS_MPSGRAPH)
+      add_executable(metal_graph_mpsgraph_disabled_test
+        tests/gpu/mpsgraph_disabled_test.c
+      )
+      target_link_libraries(metal_graph_mpsgraph_disabled_test PRIVATE MetalGraph::metal_graph)
+      add_test(NAME metal_graph_mpsgraph_disabled_test COMMAND metal_graph_mpsgraph_disabled_test)
+    endif()
   endif()
 endif()
