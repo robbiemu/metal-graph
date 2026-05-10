@@ -235,3 +235,28 @@ Future Phase 5 design work includes defining broader import/description boundari
 executables, richer shape/dtype/layout compatibility rules, MPSGraph-to-`mg_error_t` error mapping,
 and broader mixed-node conformance coverage beyond the initial raw-dispatch/MPSGraph/raw-dispatch
 path.
+
+## Phase 6 Direction
+
+Phase 6 adds an optional Python/MLX-facing adapter over the Metal Graph C ABI. Metal Graph remains
+the runtime and execution contract; Python and MLX are clients above it.
+
+The adapter must not make Python or MLX required for the core C library. The public C header must
+not expose Python, MLX, Objective-C, or private backend types. Python code must call the public C ABI
+and must not reach into Objective-C++ Metal internals.
+
+The initial Phase 6 adapter supports a narrow library-owned shared-buffer workflow:
+
+- load the Metal Graph C ABI from an adapter shared library;
+- create a device, stream, shared buffer, graph, graph exec, and launch from Python;
+- add a dispatch node using a metallib path, kernel name, explicit buffer binding, and dispatch
+  resource metadata;
+- synchronize explicitly and observe results through the shared buffer.
+
+MLX array zero-copy import, arbitrary MLX program conversion, MLX graph capture, broad tensor
+compiler behavior, dynamic-shape support, multi-GPU execution, serialization, Rust bindings, and
+Swift wrapper expansion remain out of scope. Unsupported MLX workflows must fail clearly through
+adapter-level errors rather than silently changing Metal Graph semantics.
+
+`MG_ENABLE_MLX_ADAPTER` controls the optional CMake shared-library target used by the Python adapter.
+Core CMake builds and tests must continue to pass with this option disabled.

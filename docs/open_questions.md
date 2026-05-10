@@ -78,6 +78,37 @@ MLX integration should be an adapter above the Python binding, not the runtime s
 
 Swift remains useful as an Apple-platform smoke test and ergonomic check, but it is not the primary v1 binding target. Rust is deferred until the C ABI and ownership model are more stable.
 
+### Phase 6 Python/MLX Adapter Direction
+
+Phase 6 keeps Metal Graph as the runtime and treats Python/MLX as an optional adapter/client layer.
+
+The adapter may provide a more ergonomic Python face, but it must not define graph, exec, launch,
+buffer lifetime, patching, or synchronization semantics. Those remain the C runtime contract:
+
+```text
+Graph -> GraphExec -> Launch
+```
+
+The first Python milestone works with Metal Graph-owned shared buffers and explicit dispatch graph
+construction. MLX zero-copy array import and automatic MLX program conversion are deferred until the
+lifetime and ownership model can be specified precisely.
+
+Decision:
+
+- Metal Graph remains the execution runtime.
+- Python uses the public C ABI.
+- MLX integration sits above the Python adapter and is optional.
+- Removing Python/MLX must not break the C runtime.
+- Phase 6 is not an MLX compiler frontend.
+- Unsupported MLX workflows fail clearly instead of falling back silently.
+
+Future work:
+
+- define a safe MLX array interop boundary;
+- document any zero-copy ownership transfer or borrowing rules before implementing them;
+- add richer Python examples once the C ABI stabilizes further;
+- keep Rust deferred until after the C/Python path is better exercised.
+
 ### Dispatch Buffer Patch Range Compatibility
 
 Phase 3 introduced default exec patching for dispatch buffer bindings. During review, we confirmed

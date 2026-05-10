@@ -10,6 +10,7 @@ project(
 include(CTest)
 
 option(MG_ENABLE_MPSGRAPH "Enable optional MPSGraph node backend on Apple platforms" ON)
+option(MG_ENABLE_MLX_ADAPTER "Build the optional shared library used by the Python/MLX adapter" ON)
 
 set(MG_BACKEND_SOURCE src/metal/unsupported_backend.c)
 if(APPLE)
@@ -17,7 +18,7 @@ if(APPLE)
   set(MG_BACKEND_SOURCE src/metal/metal_backend.mm)
 endif()
 
-add_library(metal_graph STATIC
+set(MG_LIBRARY_SOURCES
   src/core/arena.c
   src/core/buffer.c
   src/core/error.c
@@ -25,6 +26,10 @@ add_library(metal_graph STATIC
   src/core/patch.c
   src/core/version.c
   ${MG_BACKEND_SOURCE}
+)
+
+add_library(metal_graph STATIC
+  ${MG_LIBRARY_SOURCES}
 )
 
 add_library(MetalGraph::metal_graph ALIAS metal_graph)
@@ -63,6 +68,7 @@ if(APPLE)
   endif()
 else()
   target_compile_definitions(metal_graph PRIVATE MG_ENABLE_MPSGRAPH=0)
+  set(MG_HAS_MPSGRAPH FALSE)
 endif()
 
 set_target_properties(metal_graph PROPERTIES
@@ -73,6 +79,47 @@ set_target_properties(metal_graph PROPERTIES
   OBJCXX_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN YES
 )
+
+if(MG_ENABLE_MLX_ADAPTER)
+  add_library(metal_graph_shared SHARED
+    ${MG_LIBRARY_SOURCES}
+  )
+  target_compile_features(metal_graph_shared PUBLIC c_std_11)
+  target_compile_options(metal_graph_shared PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+  )
+  target_include_directories(metal_graph_shared
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+  )
+  if(APPLE)
+    target_link_libraries(metal_graph_shared
+      PUBLIC
+        ${FOUNDATION_FRAMEWORK}
+        ${METAL_FRAMEWORK}
+    )
+    if(MG_HAS_MPSGRAPH)
+      target_compile_definitions(metal_graph_shared PRIVATE MG_ENABLE_MPSGRAPH=1)
+      target_link_libraries(metal_graph_shared
+        PUBLIC
+          ${METAL_PERFORMANCE_SHADERS_FRAMEWORK}
+          ${METAL_PERFORMANCE_SHADERS_GRAPH_FRAMEWORK}
+      )
+    else()
+      target_compile_definitions(metal_graph_shared PRIVATE MG_ENABLE_MPSGRAPH=0)
+    endif()
+  else()
+    target_compile_definitions(metal_graph_shared PRIVATE MG_ENABLE_MPSGRAPH=0)
+  endif()
+  set_target_properties(metal_graph_shared PROPERTIES
+    OUTPUT_NAME metal_graph_shared
+    C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden
+    OBJCXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN YES
+  )
+endif()
 
 if(BUILD_TESTING)
   add_executable(metal_graph_smoke_test

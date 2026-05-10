@@ -16,14 +16,17 @@ Applications build a logical graph, instantiate it into a reusable execution pla
 
 ## Current Status
 
-This repository is in project setup. The code here is intentionally small and centered on a stable C ABI foundation that Objective-C, Swift, Python, and Rust can build on later.
+This repository is in early implementation. The core remains centered on a stable C ABI foundation
+that Objective-C, Swift, Python, and future Rust layers can build on without reaching into backend
+internals.
 
 The first implementation target is a raw Metal backend with:
 
 - opaque C handles for graph/runtime objects;
 - Objective-C friendly ownership boundaries;
 - Swift import through Clang modules;
-- future Python and Rust bindings over the same C ABI;
+- an optional Python adapter over the same C ABI;
+- future Rust bindings over the same C ABI;
 - command buffers created per launch, not reused as graph executables.
 
 ## Repository Layout
@@ -34,7 +37,7 @@ src/                    Core implementation
 tests/                  Smoke and unit tests
 docs/                   Design notes and project decisions
 bindings/swift/         Reserved for future Swift package/adapters
-bindings/python/        Reserved for future Python bindings
+bindings/python/        Optional Python adapter over the public C ABI
 bindings/rust/          Reserved for future Rust bindings
 ```
 
@@ -71,13 +74,27 @@ make clean
 make distclean
 ```
 
+The optional Python adapter uses a CMake-built shared library and can be tested with:
+
+```sh
+uv run pytest
+```
+
+Core CMake builds do not require the adapter:
+
+```sh
+cmake -S . -B /private/tmp/metal-graph-no-adapter-build -DCMAKE_BUILD_TYPE=Debug -DMG_ENABLE_MLX_ADAPTER=OFF
+cmake --build /private/tmp/metal-graph-no-adapter-build
+ctest --test-dir /private/tmp/metal-graph-no-adapter-build --output-on-failure
+```
+
 ## ABI Direction
 
 The project starts C-first because it gives the cleanest compatibility path:
 
 - Objective-C can include the headers directly.
 - Swift can import the C module via `include/module.modulemap`.
-- Python can use a C extension, ctypes/cffi, or generated bindings later.
+- Python currently uses a thin ctypes adapter; cffi or generated bindings may be added later.
 - Rust can bind through `bindgen` or handwritten `extern "C"` declarations later.
 
 The C API uses opaque handles and status codes. Ownership, lifetime, thread-safety, and backend error reporting should be documented before the API is treated as stable.
