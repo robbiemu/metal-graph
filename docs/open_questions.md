@@ -1,8 +1,23 @@
-# v1 Intent Resolutions
+# Open Questions
+
+This file tracks unresolved design questions first, then records resolved decisions and lessons learned so future phases do not reopen settled choices by accident.
+
+## Current Open Questions
+
+There are no currently tracked open questions for Phase 0 or Phase 1.
+
+When new questions arise, add them here with:
+
+- the phase or API area affected;
+- the decision needed;
+- options under consideration;
+- the owner or next action, if known.
+
+## Resolved Decisions And Lessons Learned
 
 These notes resolve the initial project open questions for v1 intent. They are direction-setting rather than permanent constraints; future phases may revise them deliberately, but should not drift accidentally.
 
-## Platform Floor
+### Platform Floor
 
 v1 targets macOS 15.0+ on Apple Silicon with real Apple Silicon GPU execution as the conformance target.
 
@@ -14,7 +29,7 @@ Optional backend capabilities include `MTLResidencySet`, `MTLIndirectCommandBuff
 
 `MTLResidencySet` is an optimization for large stable resource sets, not a correctness mechanism. `MTLIndirectCommandBuffer` is an optimization for eligible static dispatch groups, not the public graph abstraction. MPSGraph is an optional tensor-subgraph backend, not part of the v1 core runtime.
 
-## Thread Safety
+### Thread Safety
 
 v1 uses caller-side synchronization.
 
@@ -29,7 +44,7 @@ A graph must not be mutated while `mgGraphInstantiate()` is running. Launching t
 
 Future versions may allow concurrent launches of the same immutable exec using independent per-launch state.
 
-## Ownership And Lifetime
+### Ownership And Lifetime
 
 v1 uses public create/destroy ownership. Public retain/release APIs are intentionally deferred.
 
@@ -43,7 +58,7 @@ Launches must retain backend resources required by submitted command buffers unt
 
 Descriptors passed to graph construction functions are borrowed only for the duration of the call. Callers may stack-allocate descriptors and temporary arrays.
 
-## Serialization
+### Serialization
 
 Serialization is optional for v1. If added before API stabilization, it should serialize portable graph descriptions only.
 
@@ -53,7 +68,7 @@ Serialized data must not include backend executable artifacts, live handles, raw
 
 Loading serialized data should produce a mutable graph or graph-builder representation. Backend executable plans must be rebuilt by instantiation. Serialization must not become a disguised binary cache.
 
-## Future Bindings
+### Future Bindings
 
 The C ABI remains the source of truth.
 
