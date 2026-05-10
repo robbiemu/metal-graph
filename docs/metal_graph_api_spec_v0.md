@@ -65,6 +65,14 @@ Phase 1 remains single-device and single-queue oriented. Events are backed by `M
 
 Phase 1 does not add arenas/heaps, patch/update semantics, indirect command buffer optimization, MPSGraph nodes, MLX, Python bindings, Swift wrappers, or Rust bindings.
 
+## v1 Intent
+
+v1 targets macOS 15.0+ on Apple Silicon. The required backend path is raw Metal compute/blit execution with freshly encoded command buffers and `MTLSharedEvent` timeline events. Optional features such as residency sets, ICBs, MPSGraph, Metal 4 APIs, iOS/iPadOS, and Python/MLX adapters must remain optional unless a future API explicitly requires them.
+
+v1 uses caller-side synchronization. Graphs are mutable and not thread-safe. Graph execs are immutable and reusable after completion, but only one in-flight launch per exec is valid in v1. Destroying an exec or stream while a launch using it is in flight is invalid.
+
+Public ownership is create/destroy. Graph execs must retain/copy the buffers, events, descriptors, and backend objects needed for relaunch after source graph, descriptor, buffer handle, or event handle destruction. Descriptors are borrowed only for the duration of API calls.
+
 ## Future Phases
 
 Later phases may add arenas/heaps, patch/update semantics, indirect command buffer optimization, MPSGraph nodes, and MLX/Python adapters.

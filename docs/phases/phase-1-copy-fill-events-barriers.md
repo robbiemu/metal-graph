@@ -23,7 +23,7 @@ Barrier nodes are conservative graph ordering nodes in Phase 1. The current sing
 
 All Phase 1 node parameters are frozen at graph instantiation and are not patchable.
 
-`GraphExec` retains all buffers and events needed for relaunch. `mg_launch_t` also retains resources referenced by an in-flight launch so destroying the source graph, exec, or caller-owned event/buffer handles does not invalidate submitted command buffers.
+`GraphExec` retains all buffers and events needed for relaunch. `mg_launch_t` also retains resources referenced by submitted command buffers until launch completion. This preserves backend resource lifetime, but v1 still treats destroying an exec or stream while a launch using it is in flight as invalid caller behavior.
 
 ## Constraints
 

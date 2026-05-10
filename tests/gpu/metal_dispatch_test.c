@@ -310,31 +310,6 @@ int main(void) {
         check_fill(fill_values, 0xAB, "phase1 relaunch fill")) {
         goto cleanup;
     }
-    mg_launch_destroy(launch);
-    launch = NULL;
-
-    src_values[0] = 1;
-    src_values[1] = 2;
-    src_values[2] = 3;
-    src_values[3] = 4;
-    memset(dst_values, 0, sizeof(uint32_t) * 4);
-    memset(fill_values, 0, 8);
-    if (expect_status(mg_graph_launch(exec, stream, &launch, &error), MG_STATUS_OK,
-                      "launch before early exec destroy", &error)) {
-        goto cleanup;
-    }
-    mg_graph_exec_destroy(exec);
-    exec = NULL;
-    mg_event_destroy(event);
-    event = NULL;
-    if (expect_status(mg_launch_synchronize(launch, &error), MG_STATUS_OK,
-                      "sync after early exec destroy", &error)) {
-        goto cleanup;
-    }
-    if (check_values(dst_values, 2, 3, 4, 5, "phase1 launch-retained resources") ||
-        check_fill(fill_values, 0xAB, "phase1 launch-retained fill")) {
-        goto cleanup;
-    }
 
     rc = 0;
 
