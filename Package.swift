@@ -23,10 +23,15 @@ let package = Package(
                 "bindings",
                 "build",
                 "docs",
+                "src/shaders",
                 "tests",
             ],
             sources: ["src"],
-            publicHeadersPath: "include"
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation", .when(platforms: [.macOS])),
+                .linkedFramework("Metal", .when(platforms: [.macOS])),
+            ]
         ),
         .testTarget(
             name: "MetalGraphSwiftSmokeTests",
