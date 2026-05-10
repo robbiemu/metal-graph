@@ -16,14 +16,17 @@ Applications build a logical graph, instantiate it into a reusable execution pla
 
 ## Current Status
 
-This repository is in project setup. The code here is intentionally small and centered on a stable C ABI foundation that Objective-C, Swift, Python, and Rust can build on later.
+This repository is in early implementation. The core remains centered on a stable C ABI foundation
+that Objective-C, Swift, Python, and future Rust layers can build on without reaching into backend
+internals.
 
 The first implementation target is a raw Metal backend with:
 
 - opaque C handles for graph/runtime objects;
 - Objective-C friendly ownership boundaries;
 - Swift import through Clang modules;
-- future Python and Rust bindings over the same C ABI;
+- an optional Python adapter over the same C ABI;
+- future Rust bindings over the same C ABI;
 - command buffers created per launch, not reused as graph executables.
 
 ## Repository Layout
@@ -69,6 +72,20 @@ Useful maintenance targets:
 ```sh
 make clean
 make distclean
+```
+
+The optional Python adapter uses a CMake-built shared library and can be tested with:
+
+```sh
+uv run pytest
+```
+
+Core CMake builds do not require the adapter:
+
+```sh
+cmake -S . -B /private/tmp/metal-graph-no-adapter-build -DCMAKE_BUILD_TYPE=Debug -DMG_ENABLE_MLX_ADAPTER=OFF
+cmake --build /private/tmp/metal-graph-no-adapter-build
+ctest --test-dir /private/tmp/metal-graph-no-adapter-build --output-on-failure
 ```
 
 ## ABI Direction
