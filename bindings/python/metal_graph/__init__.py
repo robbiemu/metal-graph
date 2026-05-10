@@ -89,6 +89,11 @@ class InteropDiagnostic:
     copy_fallback_available: bool = False
     synchronization: str = ""
     resource_retention: str = ""
+    requested_mode: str = ""
+    selected_mode: str = ""
+    shared_storage_verified: bool = False
+    copy_bytes: int = 0
+    fallback_reason: str = ""
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -102,6 +107,11 @@ class InteropDiagnostic:
             "copy_fallback_available": self.copy_fallback_available,
             "synchronization": self.synchronization,
             "resource_retention": self.resource_retention,
+            "requested_mode": self.requested_mode,
+            "selected_mode": self.selected_mode,
+            "shared_storage_verified": self.shared_storage_verified,
+            "copy_bytes": self.copy_bytes,
+            "fallback_reason": self.fallback_reason,
         }
 
 
@@ -744,6 +754,11 @@ def _mlx_zero_copy_diagnostic(reason: str | None = None) -> InteropDiagnostic:
             "future zero-copy support must retain the source MLX array while the buffer wrapper "
             "exists"
         ),
+        requested_mode="zero_copy",
+        selected_mode="reject",
+        shared_storage_verified=False,
+        copy_bytes=0,
+        fallback_reason="unsupported_public_api",
     )
 
 
@@ -757,10 +772,15 @@ def _mlx_absent_diagnostic() -> InteropDiagnostic:
         is_optional=True,
         message="MLX is not installed; zero-copy MLX import cannot be evaluated.",
         copy_fallback_available=True,
+        requested_mode="zero_copy",
+        selected_mode="skipped",
+        shared_storage_verified=False,
+        copy_bytes=0,
+        fallback_reason="missing_optional_dependency",
     )
 
 
-def _explicit_copy_diagnostic() -> InteropDiagnostic:
+def _explicit_copy_diagnostic(copy_bytes: int = 0) -> InteropDiagnostic:
     return InteropDiagnostic(
         path="copy",
         source="python",
@@ -781,10 +801,15 @@ def _explicit_copy_diagnostic() -> InteropDiagnostic:
             "the Python Buffer wrapper retains the source owner; launches retain bound mg_buffer_t "
             "resources"
         ),
+        requested_mode="copy",
+        selected_mode="copy",
+        shared_storage_verified=False,
+        copy_bytes=copy_bytes,
+        fallback_reason="",
     )
 
 
-def _reject_diagnostic(reason: str) -> InteropDiagnostic:
+def _reject_diagnostic(reason: str, *, requested_mode: str) -> InteropDiagnostic:
     return InteropDiagnostic(
         path="reject",
         source="python",
@@ -793,6 +818,10 @@ def _reject_diagnostic(reason: str) -> InteropDiagnostic:
         is_zero_copy=False,
         is_optional=True,
         message=reason,
+        requested_mode=requested_mode,
+        selected_mode="reject",
+        shared_storage_verified=False,
+        fallback_reason=reason,
     )
 
 
@@ -806,7 +835,7 @@ def _memoryview_for_explicit_copy(array) -> memoryview:
                 "mode='copy' requires an MLX array or another object exposing the Python "
                 "buffer protocol"
             ),
-            diagnostic=_reject_diagnostic("unsupported_object_type"),
+            diagnostic=_reject_diagnostic("unsupported_object_type", requested_mode="copy"),
         ) from exc
 
     if view.nbytes == 0:
@@ -818,7 +847,7 @@ def _memoryview_for_explicit_copy(array) -> memoryview:
         raise UnsupportedWorkflowError(
             MG_STATUS_UNSUPPORTED,
             message="mode='copy' requires a contiguous source buffer",
-            diagnostic=_reject_diagnostic("unsupported_layout"),
+            diagnostic=_reject_diagnostic("unsupported_layout", requested_mode="copy"),
         )
     return view.cast("B")
 
@@ -845,7 +874,7 @@ def can_import_mlx_array(array, *, mode: str = "zero_copy") -> MlxImportSupport:
 
     if mode == "copy":
         try:
-            _memoryview_for_explicit_copy(array)
+            source = _memoryview_for_explicit_copy(array)
         except MetalGraphError as exc:
             return MlxImportSupport(
                 supported=False,
@@ -861,7 +890,7 @@ def can_import_mlx_array(array, *, mode: str = "zero_copy") -> MlxImportSupport:
             shared_storage=False,
             reason="explicit copy import is available through the Python buffer protocol",
             status="explicit_copy",
-            diagnostic=_explicit_copy_diagnostic(),
+            diagnostic=_explicit_copy_diagnostic(source.nbytes),
         )
 
     raise ValueError("mode must be 'zero_copy' or 'copy'")
@@ -899,7 +928,7 @@ def import_mlx_array(array, *, mode: str = "zero_copy", device: Device | None = 
     buffer._source_owner = array
     buffer._import_mode = "copy"
     buffer._shared_storage = False
-    buffer._diagnostic = _explicit_copy_diagnostic()
+    buffer._diagnostic = _explicit_copy_diagnostic(source.nbytes)
     return buffer
 
 

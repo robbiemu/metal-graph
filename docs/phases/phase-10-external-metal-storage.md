@@ -115,3 +115,13 @@ unless Phase 11 can obtain these facts through a supported public API or support
 - synchronization contract.
 
 Until then, `mode="zero_copy"` rejection remains correct and explicit copy remains labeled copy.
+
+## Phase 11 Follow-Up
+
+Phase 11 confirms that the Phase 10 external Metal wrapper is still blocked from MLX zero-copy by
+MLX storage visibility, not by Metal Graph runtime capability. The current public MLX Python surface
+does not document a stable `MTLBuffer` plus byte-range/device/lifetime export, and this repository
+does not include a maintained shim.
+
+Therefore MLX `mode="zero_copy"` still rejects with `unsupported_public_api`. Phase 10 remains the
+required runtime foundation for any future supported MLX zero-copy path.

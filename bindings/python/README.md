@@ -120,6 +120,20 @@ existing C ABI diagnostics only; Phase 9 does not add new backend instrumentatio
 details remain limited to existing structured errors and ICB fallback fields when an MPSGraph node
 makes ICB ineligible.
 
+Phase 11 adds narrow adapter diagnostics without changing MLX semantics:
+
+```python
+status = mg.mlx_zero_copy_status()
+assert status.diagnostic.selected_mode == "reject"
+assert not status.diagnostic.shared_storage_verified
+assert status.diagnostic.copy_bytes == 0
+
+support = mg.can_import_mlx_array(bytearray((1, 0, 0, 0)), mode="copy")
+assert support.diagnostic.selected_mode == "copy"
+assert support.diagnostic.copy_bytes == 4
+assert not support.diagnostic.shared_storage_verified
+```
+
 ## Examples
 
 Source-checkout examples live under `examples/python/`:

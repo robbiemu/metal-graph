@@ -365,3 +365,34 @@ Phase 10 does not complete MLX zero-copy. MLX `mode="zero_copy"` may remain
 shim that provides storage identity, byte range, device identity, lifetime, layout/dtype, and
 synchronization facts. Phase 10 also does not add hidden synchronization, MLX graph capture, Core ML
 or Metal ML inference nodes, or an ANE/Neural Accelerator optimization flag.
+
+## Phase 11 Direction
+
+Phase 11 attempts to connect MLX arrays to the Phase 10 external Metal storage wrapper only through
+a supported public MLX storage export path or a deliberately maintained shim.
+
+The required facts are:
+
+- stable Metal-backed storage identity or equivalent handle;
+- byte offset and byte length;
+- device identity compatible with `mg_device_t`;
+- dtype, shape, contiguous layout or representable strides;
+- mutability and write intent;
+- lifetime owner that can be retained;
+- explicit synchronization contract.
+
+The current implementation does not find those facts in the public MLX Python API and this
+repository does not provide a maintained shim. Therefore Phase 11 keeps MLX zero-copy in the
+`unsupported_public_api` state. `mode="zero_copy"` rejects clearly and carries adapter diagnostics;
+`mode="copy"` remains an explicit independent-buffer copy.
+
+The Python adapter exposes adapter import diagnostics for MLX import attempts. Rejected
+zero-copy reports `selected_mode = reject`, `shared_storage_verified = false`,
+`copy_bytes = 0`, and `fallback_reason = unsupported_public_api`. Explicit copy reports
+`selected_mode = copy`, `is_zero_copy = false`, `shared_storage_verified = false`, and the number
+of copied bytes.
+
+Phase 11 does not use private MLX internals, does not claim positive zero-copy, does not add hidden
+synchronization, does not add MLX graph capture or compiler behavior, and does not introduce Core ML,
+Metal ML, ANE, or Neural Accelerator API surface. The core C runtime remains independent of Python
+and MLX.

@@ -1,0 +1,11 @@
+{
+  "mlx_required": false,
+  "mlx_installed_in_author_environment": false,
+  "evaluated_public_docs": [
+    "https://ml-explore.github.io/mlx/build/html/python/array.html",
+    "https://ml-explore.github.io/mlx/build/html/python/metal.html",
+    "https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.array.html"
+  ],
+  "core_runtime_requires_python_or_mlx": false,
+  "phase10_external_wrap_required": true
+}

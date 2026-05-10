@@ -17,6 +17,11 @@ def test_mlx_zero_copy_status_has_stable_diagnostic_fields():
     assert status.diagnostic.source == "mlx"
     assert status.diagnostic.reason == "unsupported_public_api"
     assert not status.diagnostic.is_zero_copy
+    assert not status.diagnostic.shared_storage_verified
+    assert status.diagnostic.requested_mode == "zero_copy"
+    assert status.diagnostic.selected_mode == "reject"
+    assert status.diagnostic.copy_bytes == 0
+    assert status.diagnostic.fallback_reason == "unsupported_public_api"
     assert status.diagnostic.copy_fallback_available
     assert "no zero-copy synchronization contract" in status.diagnostic.synchronization
 
@@ -30,6 +35,7 @@ def test_zero_copy_rejection_carries_diagnostic():
     assert diagnostic.source == "mlx"
     assert diagnostic.reason == "unsupported_public_api"
     assert not diagnostic.is_zero_copy
+    assert diagnostic.selected_mode == "reject"
 
 
 def test_explicit_copy_support_and_buffer_diagnostic():
@@ -39,6 +45,9 @@ def test_explicit_copy_support_and_buffer_diagnostic():
     assert support.diagnostic.path == "copy"
     assert support.diagnostic.reason == "explicit_copy_requested"
     assert not support.diagnostic.is_zero_copy
+    assert not support.diagnostic.shared_storage_verified
+    assert support.diagnostic.copy_bytes == 4
+    assert support.diagnostic.fallback_reason == ""
 
     try:
         device = mg.Device.system_default()
@@ -54,6 +63,8 @@ def test_explicit_copy_support_and_buffer_diagnostic():
             assert buffer.diagnostic.path == "copy"
             assert buffer.diagnostic.reason == "explicit_copy_requested"
             assert "synchronize" in buffer.diagnostic.synchronization
+            assert buffer.diagnostic.copy_bytes == 4
+            assert not buffer.diagnostic.shared_storage_verified
 
 
 def test_unsupported_copy_object_reports_reject_diagnostic():
@@ -62,6 +73,9 @@ def test_unsupported_copy_object_reports_reject_diagnostic():
     assert support.status == "reject"
     assert support.diagnostic.path == "reject"
     assert support.diagnostic.reason == "unsupported_object_type"
+    assert support.diagnostic.requested_mode == "copy"
+    assert support.diagnostic.selected_mode == "reject"
+    assert support.diagnostic.fallback_reason == "unsupported_object_type"
 
 
 def test_icb_diagnostic_reports_disabled_and_unavailable_paths():
