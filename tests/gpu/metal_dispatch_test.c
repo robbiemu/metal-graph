@@ -574,6 +574,19 @@ int main(void) {
     mg_node_id_t phase3_copy_id = mgNodeId(phase3_copy);
     mg_node_id_t phase3_fill_id = mgNodeId(phase3_fill);
     mg_node_id_t phase3_signal_id = mgNodeId(phase3_signal);
+    if (expect_status(mgGraphSetNodePatchFlags(phase3_graph, phase3_dispatch, 0, &error),
+                      MG_STATUS_OK, "clear source graph dispatch patch flags after instantiate",
+                      &error) ||
+        expect_status(mgGraphSetNodePatchFlags(phase3_graph, phase3_copy, 0, &error), MG_STATUS_OK,
+                      "clear source graph copy patch flags after instantiate", &error) ||
+        expect_status(mgGraphSetNodePatchFlags(phase3_graph, phase3_fill, 0, &error), MG_STATUS_OK,
+                      "clear source graph fill patch flags after instantiate", &error) ||
+        expect_status(mgGraphSetNodePatchFlags(phase3_graph, phase3_signal, 0, &error),
+                      MG_STATUS_OK, "clear source graph event patch flags after instantiate",
+                      &error)) {
+        mgGraphDestroy(phase3_graph);
+        goto cleanup;
+    }
     mgGraphDestroy(phase3_graph);
 
     if (expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
@@ -654,6 +667,30 @@ int main(void) {
         phase3_values[5] != 2 || phase3_values[6] != 2 || phase3_values[7] != 2 ||
         check_bytes(phase3_bytes, expected_patched_bytes, 8, "phase3 patched copy/fill")) {
         fprintf(stderr, "phase3 patched dispatch output is wrong\n");
+        goto cleanup;
+    }
+    mgLaunchDestroy(launch);
+    launch = NULL;
+
+    if (expect_status(mgGraphExecPatchDispatchScalar(exec, phase3_dispatch_id, 1, &wrong_delta,
+                                                     sizeof(wrong_delta), &error),
+                      MG_STATUS_INVALID_ARGUMENT,
+                      "reject phase3 wrong scalar size after successful patch", &error)) {
+        goto cleanup;
+    }
+    memset(phase3_values, 0, sizeof(uint32_t) * 8);
+    memset(phase3_bytes, 0, 8);
+    if (expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
+                      "launch phase3 after failed post-success patch", &error) ||
+        expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK,
+                      "sync phase3 after failed post-success patch", &error)) {
+        goto cleanup;
+    }
+    if (phase3_values[0] != 0 || phase3_values[1] != 0 || phase3_values[4] != 2 ||
+        phase3_values[5] != 2 || phase3_values[6] != 2 || phase3_values[7] != 2 ||
+        check_bytes(phase3_bytes, expected_patched_bytes, 8,
+                    "phase3 failed post-success patch copy/fill")) {
+        fprintf(stderr, "phase3 failed patch should preserve previously patched state\n");
         goto cleanup;
     }
 

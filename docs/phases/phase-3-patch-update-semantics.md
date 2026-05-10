@@ -18,8 +18,9 @@ launch same exec again
 ```
 
 The public patch model is node ID-based. Patchability is declared during graph construction with
-`mgGraphSetNodePatchFlags`, cloned into `mg_graph_exec_t` during instantiation, and checked before
-any exec state is mutated.
+`mgGraphSetNodePatchFlags`, cloned into each `mg_graph_exec_t` during instantiation, and checked
+before any exec state is mutated. Changing graph patch flags after instantiation only affects
+future execs created from that graph; it does not mutate existing execs.
 
 ## Public Additions
 

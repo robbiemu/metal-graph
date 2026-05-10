@@ -120,7 +120,8 @@ Patch APIs use `mgCamelCase` public function names and do not expose Metal, Obje
 - Successful patches affect future launches only.
 - Patches are rejected while a launch using the exec is in flight.
 - Failed patches leave the previous exec state usable.
-- Patchability must be declared with `mgGraphSetNodePatchFlags` before instantiation.
+- Patchability must be declared with `mgGraphSetNodePatchFlags` before the target exec is
+  instantiated. Changing graph patch flags later affects future instantiations only.
 - Patch APIs address instantiated nodes by `mg_node_id_t`.
 - Dispatch grid patches must stay within the descriptor's declared `max_grid_size`.
 - Dispatch scalar patches must use an existing scalar binding index and exactly the original scalar byte size.

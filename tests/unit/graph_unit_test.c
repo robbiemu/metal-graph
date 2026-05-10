@@ -246,7 +246,7 @@ int main(void) {
         16,
         1,
     };
-    mg_exec_node_t patch_nodes[4];
+    mg_exec_node_t patch_nodes[5];
     memset(patch_nodes, 0, sizeof(patch_nodes));
     patch_nodes[0].kind = MG_NODE_DISPATCH;
     patch_nodes[0].as.dispatch.id = 100;
@@ -287,10 +287,14 @@ int main(void) {
     patch_nodes[3].as.event.id = 103;
     patch_nodes[3].as.event.patch_flags = 0;
     patch_nodes[3].as.event.value = 1;
+    patch_nodes[4].kind = MG_NODE_EVENT_WAIT;
+    patch_nodes[4].as.event.id = 104;
+    patch_nodes[4].as.event.patch_flags = MG_PATCH_EVENT_VALUE;
+    patch_nodes[4].as.event.value = 2;
     mg_graph_exec_t patch_exec;
     memset(&patch_exec, 0, sizeof(patch_exec));
     patch_exec.nodes = patch_nodes;
-    patch_exec.node_count = 4;
+    patch_exec.node_count = 5;
 
     uint32_t new_grid[3] = {2, 1, 1};
     uint32_t too_large_grid[3] = {5, 1, 1};
@@ -325,6 +329,19 @@ int main(void) {
                       MG_STATUS_OK, "patch dispatch grid")) {
         mgGraphDestroy(graph);
         return 21;
+    }
+    if (expect_status(mgGraphExecPatchDispatchGrid(&patch_exec, 100, too_large_grid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject invalid grid after successful patch")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 22;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+    if (patch_nodes[0].as.dispatch.grid_size[0] != 2) {
+        fprintf(stderr, "failed patch should preserve previously patched dispatch grid\n");
+        mgGraphDestroy(graph);
+        return 23;
     }
 
     patch_nodes[0].as.dispatch.patch_flags |= MG_PATCH_DISPATCH_BUFFER;
@@ -377,6 +394,11 @@ int main(void) {
                       "patch event value")) {
         mgGraphDestroy(graph);
         return 26;
+    }
+    if (expect_status(mgGraphExecPatchEventValue(&patch_exec, 104, 3, &error), MG_STATUS_OK,
+                      "patch event wait value")) {
+        mgGraphDestroy(graph);
+        return 27;
     }
 
     patch_exec.in_flight_count = 1;

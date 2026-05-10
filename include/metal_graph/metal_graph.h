@@ -137,7 +137,7 @@ typedef struct mg_copy_desc {
 /*
  * Fill node descriptor. Phase 1 supports an 8-bit repeated fill value. dst must be non-NULL,
  * byte_count must be nonzero, and [dst_offset, dst_offset + byte_count) must fit inside dst.
- * Fill nodes are graph-owned and are not patchable in Phase 1.
+ * Fill node parameters are frozen by default; Phase 3 can patch declared compatible fields.
  */
 typedef struct mg_fill_desc {
     size_t size;
@@ -227,8 +227,9 @@ MG_API void mgGraphDestroy(mg_graph_t *graph);
 MG_API mg_status_t mgGraphSetArena(mg_graph_t *graph, mg_arena_t *arena, mg_error_t **out_error);
 
 /*
- * Declares which compatible fields may be patched after instantiation. Patch flags are graph
- * construction metadata: they are frozen into GraphExec and do not patch the source graph.
+ * Declares which compatible fields may be patched on execs instantiated after this call. Patch
+ * flags are graph construction metadata: they are frozen into GraphExec and do not patch existing
+ * execs or the source graph's node descriptors.
  */
 MG_API mg_status_t mgGraphSetNodePatchFlags(mg_graph_t *graph, mg_node_t *node,
                                             mg_patch_flags_t flags, mg_error_t **out_error);
@@ -240,16 +241,20 @@ MG_API mg_status_t mgGraphSetNodePatchFlags(mg_graph_t *graph, mg_node_t *node,
  */
 MG_API mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *desc,
                                           mg_node_t **out_node, mg_error_t **out_error);
-/* Adds a graph-owned copy node. Parameters are frozen at instantiation and not patchable. */
+/* Adds a graph-owned copy node. Parameters are frozen by default; declared fields may be patched.
+ */
 MG_API mg_status_t mgGraphAddCopyNode(mg_graph_t *graph, const mg_copy_desc_t *desc,
                                       mg_node_t **out_node, mg_error_t **out_error);
-/* Adds a graph-owned 8-bit fill node. Parameters are frozen at instantiation and not patchable. */
+/* Adds a graph-owned 8-bit fill node. Parameters are frozen by default; declared fields may be
+ * patched. */
 MG_API mg_status_t mgGraphAddFillNode(mg_graph_t *graph, const mg_fill_desc_t *desc,
                                       mg_node_t **out_node, mg_error_t **out_error);
-/* Adds a graph-owned timeline wait node for event >= value. Not patchable in Phase 1. */
+/* Adds a graph-owned timeline wait node for event >= value. Event values may be declared patchable.
+ */
 MG_API mg_status_t mgGraphAddEventWaitNode(mg_graph_t *graph, mg_event_t *event, uint64_t value,
                                            mg_node_t **out_node, mg_error_t **out_error);
-/* Adds a graph-owned timeline signal node for event = value. Not patchable in Phase 1. */
+/* Adds a graph-owned timeline signal node for event = value. Event values may be declared
+ * patchable. */
 MG_API mg_status_t mgGraphAddEventSignalNode(mg_graph_t *graph, mg_event_t *event, uint64_t value,
                                              mg_node_t **out_node, mg_error_t **out_error);
 /*
