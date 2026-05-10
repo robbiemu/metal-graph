@@ -1,0 +1,15 @@
+{
+  "artifact": "phase9_interop_diagnostics",
+  "schema_version": 1,
+  "phase": "v0.2-phase-9",
+  "status": "passed",
+  "source_base_git_sha": "d087f703f6e312c5bb9297b5bb17a12504c33d9b",
+  "generated_at": "2026-05-10",
+  "case_id": "MG-P9-Interop-Diagnostics",
+  "guidance_document": "docs/phases/phase-9-interop-diagnostics.md",
+  "artifacts": {
+    "environment": "environment.json",
+    "results": "results.json",
+    "report": "report.md"
+  }
+}

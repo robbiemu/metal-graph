@@ -260,3 +260,139 @@ adapter-level errors rather than silently changing Metal Graph semantics.
 
 `MG_ENABLE_MLX_ADAPTER` controls the optional CMake shared-library target used by the Python adapter.
 Core CMake builds and tests must continue to pass with this option disabled.
+
+## Phase 7 Direction
+
+Phase 7 evaluates MLX array buffer import as an optional Python adapter feature. The core C runtime
+must remain independent of Python and MLX, and public C headers must not expose MLX objects, Python
+objects, Objective-C types, Swift types, C++ types, or private backend handles.
+
+The desired zero-copy path is a Python adapter operation that returns the existing `Buffer` wrapper
+for an `mg_buffer_t` whose storage is shared with a compatible MLX array. Zero-copy means shared
+storage. A copied buffer must not be labeled zero-copy.
+
+The current public MLX Python API exposes array metadata and conversion through Python buffer
+protocol/DLPack, but does not expose enough stable storage information to safely retain and validate
+an underlying Metal buffer, byte offset/range, and device identity. Therefore the Phase 7 adapter
+must reject `mode="zero_copy"` clearly instead of using private MLX internals.
+
+The adapter may provide an explicit `mode="copy"` fallback. Copy fallback creates an independent
+Metal Graph-owned shared buffer, requires caller opt-in, and reports that the returned buffer is not
+zero-copy.
+
+Future real zero-copy support must preserve these rules:
+
+- the adapter retains the source MLX array while the returned `mg_buffer_t` wrapper exists;
+- launches retain all `mg_buffer_t` resources they need until completion;
+- synchronization remains explicit;
+- after Metal Graph writes to an imported MLX buffer, users must synchronize the Metal Graph launch
+  before reading from MLX/Python;
+- unsupported dtype, layout, device, range, mutability, lifetime, or synchronization cases fail
+  clearly.
+
+## Phase 8 Direction
+
+Phase 8 improves local Python adapter usability without changing Metal Graph runtime semantics. The
+adapter remains a thin `ctypes` client of the public C ABI.
+
+Phase 8 adds clearer shared-library discovery and actionable import/load failures.
+`METAL_GRAPH_LIBRARY` remains the sole explicit shared-library override. Source-checkout build
+outputs, package-adjacent paths, and system dynamic-loader names are searched after that explicit
+override.
+
+Shared-library load failures should report searched paths and remediation commands for a local
+CMake build. Python examples may demonstrate existing graph, buffer, launch, synchronization, and
+Phase 7 MLX unsupported/copy behavior, but they must not add a Python-first graph DSL, hidden
+synchronization, implicit copies, or new C runtime semantics.
+
+Phase 8 does not add production wheel distribution, PyPI release automation, MLX graph capture,
+new C ABI features, or Phase 9 interop diagnostics beyond small adapter error-message improvements.
+
+## Phase 9 Direction
+
+Phase 9 adds adapter-level interop diagnostics without changing execution semantics. Diagnostics
+distinguish zero-copy, explicit copy, rejection, unsupported paths, skipped optional dependencies,
+and optional backend fallback reporting where existing APIs already expose it.
+
+The Python adapter exposes a small diagnostic record with path, source, reason, zero-copy status,
+optional-feature status, synchronization guidance, and resource-retention notes. MLX zero-copy
+remains `unsupported_public_api`; `mode="zero_copy"` rejects clearly, and `mode="copy"` remains an
+explicit independent-buffer copy that reports `is_zero_copy == false`.
+
+Phase 9 wraps existing `mgGraphExecGetDiagnostics` for Python ICB observability. It does not add new
+backend behavior, hidden synchronization, MPSGraph diagnostic ABI, true MLX zero-copy, multi-queue
+scheduling, or new C ABI semantics.
+
+MPSGraph diagnostics remain limited to existing structured errors and ICB fallback diagnostics when
+MPSGraph participation affects ICB eligibility.
+
+## Phase 10 Direction
+
+Phase 10 adds the runtime foundation for external Metal storage wrapping. The core C header remains
+framework-neutral and adds only buffer-origin diagnostics:
+
+- `mg_buffer_origin_kind_t`;
+- `mg_buffer_origin_info_t`;
+- `mgBufferGetOriginInfo`.
+
+The Metal-specific entry point lives in `include/metal_graph/metal_graph_metal.h`, which may expose
+Objective-C Metal types:
+
+```text
+mgMetalBufferWrap(device, desc, out_buffer, out_error)
+```
+
+`mgMetalBufferWrap` wraps a caller-provided `id<MTLBuffer>` byte range as `mg_buffer_t` without
+copying. The wrapped buffer carries its backing byte offset, exposed byte length, origin kind,
+zero-copy/external flags, host-visible and mutable flags, and lifetime ownership hooks. Dispatch,
+copy, fill, GraphExec retention, and Launch retention use the wrapper as a normal `mg_buffer_t`
+while encoding the correct backing byte offset.
+
+External Metal wrapping reports:
+
+```text
+origin_kind = MG_BUFFER_ORIGIN_EXTERNAL_METAL
+is_zero_copy = true
+is_external = true
+source_framework = Metal
+```
+
+Library-created shared buffers continue to report as library-owned. Adapter copy paths must not
+report zero-copy.
+
+Phase 10 does not complete MLX zero-copy. MLX `mode="zero_copy"` may remain
+`unsupported_public_api` until Phase 11 can prove a supported MLX storage export path or supported
+shim that provides storage identity, byte range, device identity, lifetime, layout/dtype, and
+synchronization facts. Phase 10 also does not add hidden synchronization, MLX graph capture, Core ML
+or Metal ML inference nodes, or an ANE/Neural Accelerator optimization flag.
+
+## Phase 11 Direction
+
+Phase 11 attempts to connect MLX arrays to the Phase 10 external Metal storage wrapper only through
+a supported public MLX storage export path or a deliberately maintained shim.
+
+The required facts are:
+
+- stable Metal-backed storage identity or equivalent handle;
+- byte offset and byte length;
+- device identity compatible with `mg_device_t`;
+- dtype, shape, contiguous layout or representable strides;
+- mutability and write intent;
+- lifetime owner that can be retained;
+- explicit synchronization contract.
+
+The current implementation does not find those facts in the public MLX Python API and this
+repository does not provide a maintained shim. Therefore Phase 11 keeps MLX zero-copy in the
+`unsupported_public_api` state. `mode="zero_copy"` rejects clearly and carries adapter diagnostics;
+`mode="copy"` remains an explicit independent-buffer copy.
+
+The Python adapter exposes adapter import diagnostics for MLX import attempts. Rejected
+zero-copy reports `selected_mode = reject`, `shared_storage_verified = false`,
+`copy_bytes = 0`, and `fallback_reason = unsupported_public_api`. Explicit copy reports
+`selected_mode = copy`, `is_zero_copy = false`, `shared_storage_verified = false`, and the number
+of copied bytes.
+
+Phase 11 does not use private MLX internals, does not claim positive zero-copy, does not add hidden
+synchronization, does not add MLX graph capture or compiler behavior, and does not introduce Core ML,
+Metal ML, ANE, or Neural Accelerator API surface. The core C runtime remains independent of Python
+and MLX.

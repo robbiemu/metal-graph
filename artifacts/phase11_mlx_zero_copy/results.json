@@ -1,0 +1,17 @@
+{
+  "phase": "phase-11-mlx-zero-copy-completion",
+  "status": "unsupported_public_api",
+  "mlx_zero_copy_supported": false,
+  "shared_storage_verified": false,
+  "positive_zero_copy_workflow_ran": false,
+  "zero_copy_reject_reason": "unsupported_public_api",
+  "explicit_copy_supported": true,
+  "copy_path_is_zero_copy": false,
+  "copy_path_shared_storage_verified": false,
+  "phase10_external_metal_wrap_supported": true,
+  "supported_public_mlx_storage_export_found": false,
+  "maintained_shim_found": false,
+  "private_mlx_internals_used": false,
+  "hidden_synchronization_added": false,
+  "performance_claims": "none"
+}
