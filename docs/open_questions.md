@@ -4,7 +4,26 @@ This file tracks unresolved design questions first, then records resolved decisi
 
 ## Current Open Questions
 
-There are no currently tracked open questions for Phase 0, Phase 1, or Phase 2.
+### Dispatch Buffer Patch Range Compatibility
+
+Affected area: Phase 3 patch/update semantics and the public dispatch buffer binding ABI.
+
+Current Phase 3 behavior validates that a dispatch buffer patch uses an existing binding index, a
+non-null replacement buffer, and an offset within that buffer. It does not validate a declared
+shader-visible byte range because `mg_buffer_binding_t` currently has no `byte_count`,
+`required_length`, or resource requirement field.
+
+Decision needed: should dispatch buffer bindings declare the required byte range so compatible
+patches can prove that replacement buffers are large enough for the shader-visible access pattern?
+
+Options under consideration:
+
+- add a `byte_count` or `required_length` field to `mg_buffer_binding_t`;
+- add a separate dispatch resource requirement descriptor, keeping bindings as buffer+offset only;
+- leave byte-range validation to higher-level bindings, examples, or future shader metadata.
+
+Next action: resolve before treating Phase 3 patch ABI as stable. This is not a Phase 4 ICB
+optimization question.
 
 When new questions arise, add them here with:
 
