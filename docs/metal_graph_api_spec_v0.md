@@ -289,3 +289,21 @@ Future real zero-copy support must preserve these rules:
   before reading from MLX/Python;
 - unsupported dtype, layout, device, range, mutability, lifetime, or synchronization cases fail
   clearly.
+
+## Phase 8 Direction
+
+Phase 8 improves local Python adapter usability without changing Metal Graph runtime semantics. The
+adapter remains a thin `ctypes` client of the public C ABI.
+
+Phase 8 adds clearer shared-library discovery and actionable import/load failures.
+`METAL_GRAPH_LIBRARY` remains the sole explicit shared-library override. Source-checkout build
+outputs, package-adjacent paths, and system dynamic-loader names are searched after that explicit
+override.
+
+Shared-library load failures should report searched paths and remediation commands for a local
+CMake build. Python examples may demonstrate existing graph, buffer, launch, synchronization, and
+Phase 7 MLX unsupported/copy behavior, but they must not add a Python-first graph DSL, hidden
+synchronization, implicit copies, or new C runtime semantics.
+
+Phase 8 does not add production wheel distribution, PyPI release automation, MLX graph capture,
+new C ABI features, or Phase 9 interop diagnostics beyond small adapter error-message improvements.

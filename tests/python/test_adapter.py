@@ -7,12 +7,47 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 METALLIB = ROOT / "build" / "phase0_test_kernels.metallib"
+SHARED_LIBRARY = ROOT / "build" / "libmetal_graph_shared.dylib"
+
+
+def test_library_search_paths_include_source_checkout_build():
+    paths = mg.library_search_paths()
+    assert any("build/libmetal_graph_shared" in path for path in paths)
 
 
 def test_version_and_status():
     assert mg.version() == (0, 1, 0)
     assert mg.version_string() == "0.1.0"
     assert mg.status_string(0) == "ok"
+
+
+def test_missing_library_path_reports_clear_remediation(monkeypatch, tmp_path):
+    missing = tmp_path / "missing-libmetal_graph_shared.dylib"
+    monkeypatch.setattr(mg, "_LIB", None)
+    monkeypatch.setenv("METAL_GRAPH_LIBRARY", str(missing))
+
+    with pytest.raises(mg.MetalGraphError) as error_info:
+        mg.version()
+
+    message = str(error_info.value)
+    assert error_info.value.status == mg.MG_STATUS_UNSUPPORTED
+    assert "could not load Metal Graph shared library" in message
+    assert "searched paths:" in message
+    assert "how to fix:" in message
+    assert "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug" in message
+    assert "cmake --build build" in message
+    assert "METAL_GRAPH_LIBRARY" in message
+    assert str(missing) in message
+
+
+def test_explicit_library_path_override_loads_when_valid(monkeypatch):
+    if not SHARED_LIBRARY.exists():
+        pytest.skip("Metal Graph shared library has not been built")
+
+    monkeypatch.setattr(mg, "_LIB", None)
+    monkeypatch.setenv("METAL_GRAPH_LIBRARY", str(SHARED_LIBRARY))
+
+    assert mg.version() == (0, 1, 0)
 
 
 def test_mlx_zero_copy_import_is_explicitly_unsupported():

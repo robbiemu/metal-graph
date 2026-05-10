@@ -1,0 +1,10 @@
+{
+  "adapter_import_from_source": "pass",
+  "clear_missing_library_error": "pass",
+  "explicit_library_path_override": "pass",
+  "examples_run": "pass",
+  "mlx_absent_behavior": "pass",
+  "core_build_unaffected": "pass",
+  "adapter_disabled_core_build": "pass",
+  "performance_claims": "none"
+}

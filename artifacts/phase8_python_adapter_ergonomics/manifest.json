@@ -1,0 +1,15 @@
+{
+  "artifact": "phase8_python_adapter_ergonomics",
+  "schema_version": 1,
+  "phase": "v0.2-phase-8",
+  "status": "passed",
+  "source_base_git_sha": "1affa613f910f51620f333528eb98dcc8262b82e",
+  "generated_at": "2026-05-10",
+  "case_id": "MG-P8-Python-Adapter-Ergonomics",
+  "guidance_document": "docs/phases/phase-8-python-adapter-ergonomics.md",
+  "artifacts": {
+    "environment": "environment.json",
+    "results": "results.json",
+    "report": "report.md"
+  }
+}

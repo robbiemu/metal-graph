@@ -364,6 +364,12 @@ Docs should use Obsidian-friendly Markdown and normal links. Do not include inte
 
 Keep design notes separate from normative specification. A design note may explain why a choice was made; the spec should state what behavior is required.
 
+Questions that arise from anticipated upcoming work, known next phases, or downstream consequences
+of current work may always be added to `docs/open_questions.md`. Use that document to record the
+question, the affected phase or API area, the likely options or constraints, and any answer that is
+already known. Do not block useful open-question notes merely because the implementation for that
+future phase has not started.
+
 ## 13. What agents should do before editing
 
 Before making code changes:
