@@ -2,39 +2,45 @@
 
 #include <stdlib.h>
 
-mg_status_t mg_device_create_system_default(mg_device_t **out_device, mg_error_t **out_error) {
-    if (out_device) {
-        *out_device = NULL;
+mg_status_t mgDeviceCreateSystemDefault(mg_device_t **out_device, mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (!out_device) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "out_device is required", NULL);
     }
+    *out_device = NULL;
     return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_CREATE, MG_NODE_ID_INVALID,
                         "Metal backend is only available on Apple platforms", NULL);
 }
 
 void mg_backend_device_destroy(mg_device_t *device) { (void)device; }
 
-void mg_device_destroy(mg_device_t *device) { free(device); }
+void mgDeviceDestroy(mg_device_t *device) { free(device); }
 
-mg_status_t mg_stream_create(mg_device_t *device, mg_stream_t **out_stream,
-                             mg_error_t **out_error) {
-    (void)device;
-    if (out_stream) {
-        *out_stream = NULL;
+mg_status_t mgStreamCreate(mg_device_t *device, mg_stream_t **out_stream, mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (!device || !out_stream) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "device and out_stream are required", NULL);
     }
+    *out_stream = NULL;
     return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_CREATE, MG_NODE_ID_INVALID,
                         "Metal backend is only available on Apple platforms", NULL);
 }
 
 void mg_backend_stream_destroy(mg_stream_t *stream) { (void)stream; }
 
-void mg_stream_destroy(mg_stream_t *stream) { free(stream); }
+void mgStreamDestroy(mg_stream_t *stream) { free(stream); }
 
-mg_status_t mg_buffer_create_shared(mg_device_t *device, size_t length, mg_buffer_t **out_buffer,
-                                    mg_error_t **out_error) {
-    (void)device;
-    (void)length;
-    if (out_buffer) {
-        *out_buffer = NULL;
+mg_status_t mgBufferCreateShared(mg_device_t *device, size_t length, mg_buffer_t **out_buffer,
+                                 mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (!device || !out_buffer || length == 0) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID,
+                            "device, nonzero length, and out_buffer are required", NULL);
     }
+    *out_buffer = NULL;
     return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_CREATE, MG_NODE_ID_INVALID,
                         "Metal backend is only available on Apple platforms", NULL);
 }
@@ -46,13 +52,27 @@ void *mg_backend_buffer_contents(mg_buffer_t *buffer) {
     return NULL;
 }
 
-mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_exec_t **out_exec,
-                                 mg_error_t **out_error) {
-    (void)graph;
-    (void)device;
-    if (out_exec) {
-        *out_exec = NULL;
+mg_status_t mgEventCreate(mg_device_t *device, mg_event_t **out_event, mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (!device || !out_event) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "device and out_event are required", NULL);
     }
+    *out_event = NULL;
+    return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_CREATE, MG_NODE_ID_INVALID,
+                        "Metal shared events are only available on Apple platforms", NULL);
+}
+
+void mg_backend_event_destroy(mg_event_t *event) { (void)event; }
+
+mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_exec_t **out_exec,
+                               mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (!graph || !device || !out_exec) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_INSTANTIATE,
+                            MG_NODE_ID_INVALID, "graph, device, and out_exec are required", NULL);
+    }
+    *out_exec = NULL;
     return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_INSTANTIATE,
                         MG_NODE_ID_INVALID, "Metal backend is only available on Apple platforms",
                         NULL);
@@ -60,25 +80,30 @@ mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_grap
 
 void mg_backend_graph_exec_destroy(mg_graph_exec_t *exec) { (void)exec; }
 
-void mg_graph_exec_destroy(mg_graph_exec_t *exec) { free(exec); }
+void mgGraphExecDestroy(mg_graph_exec_t *exec) { free(exec); }
 
-mg_status_t mg_graph_launch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_t **out_launch,
-                            mg_error_t **out_error) {
-    (void)exec;
-    (void)stream;
-    if (out_launch) {
-        *out_launch = NULL;
+mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_t **out_launch,
+                          mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (!exec || !stream || !out_launch) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_ENCODE,
+                            MG_NODE_ID_INVALID, "exec, stream, and out_launch are required", NULL);
     }
+    *out_launch = NULL;
     return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_ENCODE, MG_NODE_ID_INVALID,
                         "Metal backend is only available on Apple platforms", NULL);
 }
 
-mg_status_t mg_launch_synchronize(mg_launch_t *launch, mg_error_t **out_error) {
-    (void)launch;
+mg_status_t mgLaunchSynchronize(mg_launch_t *launch, mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (!launch) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_SYNC,
+                            MG_NODE_ID_INVALID, "launch is required", NULL);
+    }
     return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_SYNC, MG_NODE_ID_INVALID,
                         "Metal backend is only available on Apple platforms", NULL);
 }
 
 void mg_backend_launch_destroy(mg_launch_t *launch) { (void)launch; }
 
-void mg_launch_destroy(mg_launch_t *launch) { free(launch); }
+void mgLaunchDestroy(mg_launch_t *launch) { free(launch); }

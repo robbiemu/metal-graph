@@ -49,6 +49,35 @@ static mg_status_t mg_graph_reserve_edges(mg_graph_t *graph, size_t required,
     return MG_STATUS_OK;
 }
 
+static bool mg_range_valid(size_t length, size_t offset, size_t byte_count) {
+    return byte_count > 0 && offset <= length && byte_count <= length - offset;
+}
+
+static mg_status_t mg_graph_alloc_node(mg_graph_t *graph, mg_node_kind_t kind, mg_node_t **out_node,
+                                       mg_error_t **out_error) {
+    mg_status_t status = mg_graph_reserve_nodes(graph, graph->node_count + 1, out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+
+    mg_node_t *node = (mg_node_t *)calloc(1, sizeof(*node));
+    if (!node) {
+        return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
+    }
+
+    node->graph = graph;
+    node->id = graph->node_count + 1;
+    node->index = graph->node_count;
+    node->kind = kind;
+    *out_node = node;
+    return MG_STATUS_OK;
+}
+
+static void mg_graph_commit_node(mg_graph_t *graph, mg_node_t *node, mg_node_t **out_node) {
+    graph->nodes[graph->node_count++] = node;
+    *out_node = node;
+}
+
 void mg_dispatch_node_clear(mg_dispatch_node_t *dispatch) {
     if (!dispatch) {
         return;
@@ -64,7 +93,35 @@ void mg_dispatch_node_clear(mg_dispatch_node_t *dispatch) {
     memset(dispatch, 0, sizeof(*dispatch));
 }
 
-mg_status_t mg_graph_create(mg_graph_t **out_graph, mg_error_t **out_error) {
+void mg_node_clear(mg_node_t *node) {
+    if (!node) {
+        return;
+    }
+
+    switch (node->kind) {
+    case MG_NODE_DISPATCH:
+        mg_dispatch_node_clear(&node->as.dispatch);
+        break;
+    case MG_NODE_COPY:
+        mg_buffer_release(node->as.copy.src);
+        mg_buffer_release(node->as.copy.dst);
+        memset(&node->as.copy, 0, sizeof(node->as.copy));
+        break;
+    case MG_NODE_FILL:
+        mg_buffer_release(node->as.fill.dst);
+        memset(&node->as.fill, 0, sizeof(node->as.fill));
+        break;
+    case MG_NODE_EVENT_WAIT:
+    case MG_NODE_EVENT_SIGNAL:
+        mg_event_release(node->as.event.event);
+        memset(&node->as.event, 0, sizeof(node->as.event));
+        break;
+    case MG_NODE_BARRIER:
+        break;
+    }
+}
+
+mg_status_t mgGraphCreate(mg_graph_t **out_graph, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!out_graph) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
@@ -81,7 +138,7 @@ mg_status_t mg_graph_create(mg_graph_t **out_graph, mg_error_t **out_error) {
     return MG_STATUS_OK;
 }
 
-void mg_graph_destroy(mg_graph_t *graph) {
+void mgGraphDestroy(mg_graph_t *graph) {
     if (!graph) {
         return;
     }
@@ -89,7 +146,7 @@ void mg_graph_destroy(mg_graph_t *graph) {
     for (size_t i = 0; i < graph->node_count; ++i) {
         mg_node_t *node = graph->nodes[i];
         if (node) {
-            mg_dispatch_node_clear(&node->dispatch);
+            mg_node_clear(node);
             free(node);
         }
     }
@@ -99,8 +156,8 @@ void mg_graph_destroy(mg_graph_t *graph) {
     free(graph);
 }
 
-mg_status_t mg_graph_add_dispatch_node(mg_graph_t *graph, const mg_dispatch_desc_t *desc,
-                                       mg_node_t **out_node, mg_error_t **out_error) {
+mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *desc,
+                                   mg_node_t **out_node, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (out_node) {
         *out_node = NULL;
@@ -127,35 +184,27 @@ mg_status_t mg_graph_add_dispatch_node(mg_graph_t *graph, const mg_dispatch_desc
                             MG_NODE_ID_INVALID, "dispatch buffer bindings are required", NULL);
     }
 
-    mg_status_t status = mg_graph_reserve_nodes(graph, graph->node_count + 1, out_error);
+    mg_node_t *node = NULL;
+    mg_status_t status = mg_graph_alloc_node(graph, MG_NODE_DISPATCH, &node, out_error);
     if (status != MG_STATUS_OK) {
         return status;
     }
 
-    mg_node_t *node = (mg_node_t *)calloc(1, sizeof(*node));
-    if (!node) {
-        return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
-    }
+    node->as.dispatch.metallib_path = mg_strdup(desc->metallib_path);
+    node->as.dispatch.kernel_name = mg_strdup(desc->kernel_name);
+    memcpy(node->as.dispatch.grid_size, desc->grid_size, sizeof(node->as.dispatch.grid_size));
+    memcpy(node->as.dispatch.threads_per_threadgroup, desc->threads_per_threadgroup,
+           sizeof(node->as.dispatch.threads_per_threadgroup));
 
-    node->graph = graph;
-    node->id = graph->node_count + 1;
-    node->index = graph->node_count;
-    node->kind = MG_NODE_DISPATCH;
-    node->dispatch.metallib_path = mg_strdup(desc->metallib_path);
-    node->dispatch.kernel_name = mg_strdup(desc->kernel_name);
-    memcpy(node->dispatch.grid_size, desc->grid_size, sizeof(node->dispatch.grid_size));
-    memcpy(node->dispatch.threads_per_threadgroup, desc->threads_per_threadgroup,
-           sizeof(node->dispatch.threads_per_threadgroup));
-
-    if (!node->dispatch.metallib_path || !node->dispatch.kernel_name) {
-        mg_dispatch_node_clear(&node->dispatch);
+    if (!node->as.dispatch.metallib_path || !node->as.dispatch.kernel_name) {
+        mg_node_clear(node);
         free(node);
         return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
     }
 
     for (uint32_t i = 0; i < desc->buffer_count; ++i) {
         if (!desc->buffers[i].buffer || desc->buffers[i].offset > desc->buffers[i].buffer->length) {
-            mg_dispatch_node_clear(&node->dispatch);
+            mg_node_clear(node);
             free(node);
             return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
                                 MG_NODE_ID_INVALID, "dispatch buffer binding is invalid", NULL);
@@ -163,30 +212,153 @@ mg_status_t mg_graph_add_dispatch_node(mg_graph_t *graph, const mg_dispatch_desc
     }
 
     if (desc->buffer_count > 0) {
-        size_t bytes = sizeof(*node->dispatch.buffers) * desc->buffer_count;
-        node->dispatch.buffers = (mg_buffer_binding_t *)malloc(bytes);
-        if (!node->dispatch.buffers) {
-            mg_dispatch_node_clear(&node->dispatch);
+        size_t bytes = sizeof(*node->as.dispatch.buffers) * desc->buffer_count;
+        node->as.dispatch.buffers = (mg_buffer_binding_t *)malloc(bytes);
+        if (!node->as.dispatch.buffers) {
+            mg_node_clear(node);
             free(node);
             return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
         }
 
-        memcpy(node->dispatch.buffers, desc->buffers, bytes);
-        node->dispatch.buffer_count = desc->buffer_count;
+        memcpy(node->as.dispatch.buffers, desc->buffers, bytes);
+        node->as.dispatch.buffer_count = desc->buffer_count;
         for (uint32_t i = 0; i < desc->buffer_count; ++i) {
-            mg_buffer_retain(node->dispatch.buffers[i].buffer);
+            mg_buffer_retain(node->as.dispatch.buffers[i].buffer);
         }
     }
 
-    graph->nodes[graph->node_count++] = node;
-    *out_node = node;
+    mg_graph_commit_node(graph, node, out_node);
     return MG_STATUS_OK;
 }
 
-mg_node_id_t mg_node_id(const mg_node_t *node) { return node ? node->id : MG_NODE_ID_INVALID; }
+mg_status_t mgGraphAddCopyNode(mg_graph_t *graph, const mg_copy_desc_t *desc, mg_node_t **out_node,
+                               mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (out_node) {
+        *out_node = NULL;
+    }
 
-mg_status_t mg_graph_add_dependency(mg_graph_t *graph, mg_node_t *before, mg_node_t *after,
-                                    mg_error_t **out_error) {
+    if (!graph || !desc || !out_node) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "graph, desc, and out_node are required", NULL);
+    }
+    if (desc->size < sizeof(*desc) || !desc->src || !desc->dst ||
+        !mg_range_valid(desc->src->length, desc->src_offset, desc->byte_count) ||
+        !mg_range_valid(desc->dst->length, desc->dst_offset, desc->byte_count)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "copy descriptor is invalid", NULL);
+    }
+
+    mg_node_t *node = NULL;
+    mg_status_t status = mg_graph_alloc_node(graph, MG_NODE_COPY, &node, out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+
+    node->as.copy.src = desc->src;
+    node->as.copy.src_offset = desc->src_offset;
+    node->as.copy.dst = desc->dst;
+    node->as.copy.dst_offset = desc->dst_offset;
+    node->as.copy.byte_count = desc->byte_count;
+    mg_buffer_retain(node->as.copy.src);
+    mg_buffer_retain(node->as.copy.dst);
+    mg_graph_commit_node(graph, node, out_node);
+    return MG_STATUS_OK;
+}
+
+mg_status_t mgGraphAddFillNode(mg_graph_t *graph, const mg_fill_desc_t *desc, mg_node_t **out_node,
+                               mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (out_node) {
+        *out_node = NULL;
+    }
+
+    if (!graph || !desc || !out_node) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "graph, desc, and out_node are required", NULL);
+    }
+    if (desc->size < sizeof(*desc) || !desc->dst ||
+        !mg_range_valid(desc->dst->length, desc->dst_offset, desc->byte_count)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "fill descriptor is invalid", NULL);
+    }
+
+    mg_node_t *node = NULL;
+    mg_status_t status = mg_graph_alloc_node(graph, MG_NODE_FILL, &node, out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+
+    node->as.fill.dst = desc->dst;
+    node->as.fill.dst_offset = desc->dst_offset;
+    node->as.fill.byte_count = desc->byte_count;
+    node->as.fill.value = desc->value;
+    mg_buffer_retain(node->as.fill.dst);
+    mg_graph_commit_node(graph, node, out_node);
+    return MG_STATUS_OK;
+}
+
+static mg_status_t mg_graph_add_event_node(mg_graph_t *graph, mg_node_kind_t kind,
+                                           mg_event_t *event, uint64_t value, mg_node_t **out_node,
+                                           mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (out_node) {
+        *out_node = NULL;
+    }
+
+    if (!graph || !event || !out_node) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "graph, event, and out_node are required", NULL);
+    }
+
+    mg_node_t *node = NULL;
+    mg_status_t status = mg_graph_alloc_node(graph, kind, &node, out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+
+    node->as.event.event = event;
+    node->as.event.value = value;
+    mg_event_retain(event);
+    mg_graph_commit_node(graph, node, out_node);
+    return MG_STATUS_OK;
+}
+
+mg_status_t mgGraphAddEventWaitNode(mg_graph_t *graph, mg_event_t *event, uint64_t value,
+                                    mg_node_t **out_node, mg_error_t **out_error) {
+    return mg_graph_add_event_node(graph, MG_NODE_EVENT_WAIT, event, value, out_node, out_error);
+}
+
+mg_status_t mgGraphAddEventSignalNode(mg_graph_t *graph, mg_event_t *event, uint64_t value,
+                                      mg_node_t **out_node, mg_error_t **out_error) {
+    return mg_graph_add_event_node(graph, MG_NODE_EVENT_SIGNAL, event, value, out_node, out_error);
+}
+
+mg_status_t mgGraphAddBarrierNode(mg_graph_t *graph, mg_node_t **out_node, mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (out_node) {
+        *out_node = NULL;
+    }
+
+    if (!graph || !out_node) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "graph and out_node are required", NULL);
+    }
+
+    mg_node_t *node = NULL;
+    mg_status_t status = mg_graph_alloc_node(graph, MG_NODE_BARRIER, &node, out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+
+    mg_graph_commit_node(graph, node, out_node);
+    return MG_STATUS_OK;
+}
+
+mg_node_id_t mgNodeId(const mg_node_t *node) { return node ? node->id : MG_NODE_ID_INVALID; }
+
+mg_status_t mgGraphAddDependency(mg_graph_t *graph, mg_node_t *before, mg_node_t *after,
+                                 mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!graph || !before || !after || before->graph != graph || after->graph != graph) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
@@ -282,7 +454,7 @@ mg_status_t mg_graph_topological_order(const mg_graph_t *graph, size_t *order,
     return MG_STATUS_OK;
 }
 
-mg_status_t mg_graph_validate(const mg_graph_t *graph, mg_error_t **out_error) {
+mg_status_t mgGraphValidate(const mg_graph_t *graph, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!graph) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_VALIDATE,

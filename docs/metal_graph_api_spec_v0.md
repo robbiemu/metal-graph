@@ -1,6 +1,6 @@
 # Metal Graph API Spec v0
 
-This document captures the repository-local Phase 0 contract for Metal Graph. It is intentionally narrower than the broader research/specification notes and should be expanded as phases land.
+This document captures the repository-local Phase 0/1 contract for Metal Graph. It is intentionally narrower than the broader technical specification and should be expanded as phases land.
 
 ## Model
 
@@ -38,6 +38,8 @@ Phase 0 must not expose Objective-C, Swift, C++ STL, Metal framework types, indi
 ## Phase 0 Semantics
 
 - Public headers must compile as C and C++.
+- Public C functions use `mg`-prefixed camelCase names. Public types, structs, and enum values use the existing `mg_*` / `MG_*` C naming style.
+- The public header must not expose duplicate snake_case aliases for public functions.
 - Every fallible API returns `mg_status_t`.
 - Detailed diagnostics are returned through `mg_error_t`.
 - A graph with a cycle must fail validation with `MG_STATUS_INVALID_TOPOLOGY`.
@@ -49,6 +51,37 @@ Phase 0 must not expose Objective-C, Swift, C++ STL, Metal framework types, indi
 - Synchronization waits for completion and reports command buffer errors.
 - Metal resources referenced by an instantiated graph or launch must remain retained until no longer needed.
 
+## Phase 1 Public Surface
+
+Phase 1 adds:
+
+- copy nodes;
+- 8-bit fill nodes;
+- timeline event creation/destruction;
+- event wait/signal nodes;
+- conservative barrier nodes.
+
+Phase 1 remains single-device and single-queue oriented. Events are backed by `MTLSharedEvent` on Apple platforms. Barrier nodes preserve graph ordering but do not claim full multi-queue or cross-encoder hazard semantics.
+
+Phase 1 does not add arenas/heaps, patch/update semantics, indirect command buffer optimization, MPSGraph nodes, MLX, Python bindings, Swift wrappers, or Rust bindings.
+
+## Phase 1 Semantics
+
+- Copy and fill ranges must be bounds-checked without relying on wrapping `offset + size` arithmetic.
+- Event creation returns `MG_STATUS_UNSUPPORTED` on unsupported backends.
+- Phase 1 node parameters are frozen at instantiation and are not patchable.
+- `mg_graph_exec_t` retains buffers and events required for relaunch.
+- Destroying the source graph, source buffer handles, or source event handles after successful instantiation must not invalidate the graph exec.
+- Destroying a graph exec or stream while a launch using it is in flight remains invalid v1 caller behavior.
+
+## v1 Intent
+
+v1 targets macOS 15.0+ on Apple Silicon. The required backend path is raw Metal compute/blit execution with freshly encoded command buffers and `MTLSharedEvent` timeline events. Optional features such as residency sets, ICBs, MPSGraph, Metal 4 APIs, iOS/iPadOS, and Python/MLX adapters must remain optional unless a future API explicitly requires them.
+
+v1 uses caller-side synchronization. Graphs are mutable and not thread-safe. Graph execs are immutable and reusable after completion, but only one in-flight launch per exec is valid in v1. Destroying an exec or stream while a launch using it is in flight is invalid.
+
+Public ownership is create/destroy. Graph execs must retain/copy the buffers, events, descriptors, and backend objects needed for relaunch after source graph, descriptor, buffer handle, or event handle destruction. Descriptors are borrowed only for the duration of API calls.
+
 ## Future Phases
 
-Later phases may add copy/fill/event/barrier nodes, arenas/heaps, patch/update semantics, indirect command buffer optimization, MPSGraph nodes, and MLX/Python adapters. Those capabilities must remain out of the Phase 0 public API.
+Later phases may add arenas/heaps, patch/update semantics, indirect command buffer optimization, MPSGraph nodes, Python/MLX adapters, Swift convenience wrappers, and Rust bindings. Future phases must preserve the Phase 0/1 naming convention and behavior unless an explicit API version change says otherwise.
