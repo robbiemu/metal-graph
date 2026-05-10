@@ -272,6 +272,25 @@ int main(void) {
         return 19;
     }
 
+    mg_buffer_binding_t duplicate_bindings[2] = {
+        resource_binding,
+        resource_binding,
+    };
+    resource_desc.buffers = duplicate_bindings;
+    resource_desc.buffer_count = 2;
+    resource_desc.resources = NULL;
+    resource_desc.resource_count = 0;
+    if (expect_status(mgGraphAddDispatchNode(graph, &resource_desc, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject duplicate dispatch buffer bindings")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 20;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    resource_desc.buffers = &resource_binding;
+    resource_desc.buffer_count = 1;
     mg_dispatch_resource_desc_t duplicate_resources[2] = {resource, resource};
     resource_desc.resources = duplicate_resources;
     resource_desc.resource_count = 2;

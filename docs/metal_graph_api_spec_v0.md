@@ -161,8 +161,10 @@ and alignment constraints.
 - Unknown access is valid metadata, but it is conservative and makes ICB eligibility fail.
 - ICB is optional. If ICB is disabled, unsupported, or unsafe, the exec remains valid and launches
   through direct encoding.
-- ICB eligibility is conservative: Phase 4 supports only dispatch-only static groups with known
+- ICB eligibility is conservative: Phase 4 supports only static single-dispatch execs with known
   resource ranges, known access modes, no scalar bindings, and no patchable dispatch fields.
+  Multi-dispatch ICB groups are deferred until dependency-aware hazard analysis can prove they
+  preserve direct-encoding semantics.
 - Public behavior must be identical with ICB enabled or disabled. Launches still create fresh Metal
   command buffers.
 - Phase 4 does not expose `MTLIndirectCommandBuffer`, MPSGraph, MLX, Python, Swift wrappers, Rust,

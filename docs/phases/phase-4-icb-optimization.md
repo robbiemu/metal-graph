@@ -56,18 +56,21 @@ forces conservative ICB fallback.
 
 ## Phase 4B: Optional ICB Optimization
 
-Phase 4 adds a narrow internal ICB path for eligible static dispatch-only graph execs.
+Phase 4 adds a narrow internal ICB path for eligible static single-dispatch graph execs.
 
 ICB is used only when:
 
 - ICB is available on the backend;
 - `MG_OPTIMIZATION_ICB` is enabled on the exec;
-- the graph exec contains only dispatch nodes;
-- each dispatch has known resource requirements for its buffer bindings;
-- no dispatch has scalar bindings;
-- no dispatch has patchable fields;
+- the graph exec contains exactly one dispatch node;
+- the dispatch has known resource requirements for its buffer bindings;
+- the dispatch has no scalar bindings;
+- the dispatch has no patchable fields;
 - no copy, fill, event, barrier, workspace, MPSGraph, host callback, or other unsupported node
   interrupts the group.
+
+Multi-dispatch ICB groups are deferred until dependency-aware hazard analysis can prove that
+concurrent indirect dispatch execution preserves direct-encoding semantics.
 
 If any requirement is not met, the exec uses direct encoding. A `GraphExec` remains a reusable
 host-side execution plan, not a reused `MTLCommandBuffer`; launches still create fresh command

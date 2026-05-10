@@ -274,6 +274,12 @@ static mg_status_t mg_icb_plan_build(mg_graph_exec_t *exec, id<MTLDevice> metalD
     }
     exec->icb.groups_planned = 1;
 
+    if (exec->node_count != 1) {
+        exec->icb.groups_fallback = 1;
+        exec->icb.last_fallback_reason = MG_ICB_FALLBACK_INELIGIBLE_NODE;
+        return MG_STATUS_OK;
+    }
+
     if (!exec->icb.available) {
         exec->icb.groups_fallback = 1;
         exec->icb.last_fallback_reason = MG_ICB_FALLBACK_UNSUPPORTED;

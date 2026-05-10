@@ -572,6 +572,36 @@ int main(void) {
     mgGraphExecDestroy(exec);
     exec = NULL;
 
+    mg_graph_t *multi_dispatch_graph = NULL;
+    mg_node_t *multi_first = NULL;
+    mg_node_t *multi_second = NULL;
+    mg_dispatch_desc_t multi_desc = add_one_desc(icb_buffer);
+    if (expect_status(mgGraphCreate(&multi_dispatch_graph, &error), MG_STATUS_OK,
+                      "create phase4 multi-dispatch graph", &error) ||
+        expect_status(
+            mgGraphAddDispatchNode(multi_dispatch_graph, &multi_desc, &multi_first, &error),
+            MG_STATUS_OK, "add phase4 multi-dispatch first", &error) ||
+        expect_status(
+            mgGraphAddDispatchNode(multi_dispatch_graph, &multi_desc, &multi_second, &error),
+            MG_STATUS_OK, "add phase4 multi-dispatch second", &error) ||
+        expect_status(mgGraphInstantiate(multi_dispatch_graph, device, &exec, &error), MG_STATUS_OK,
+                      "instantiate phase4 multi-dispatch graph", &error)) {
+        mgGraphDestroy(multi_dispatch_graph);
+        goto cleanup;
+    }
+    mgGraphDestroy(multi_dispatch_graph);
+    memset(&diagnostics, 0, sizeof(diagnostics));
+    diagnostics.size = sizeof(diagnostics);
+    if (expect_status(mgGraphExecGetDiagnostics(exec, &diagnostics, &error), MG_STATUS_OK,
+                      "get phase4 multi-dispatch diagnostics", &error) ||
+        diagnostics.icb_groups_planned != 1 || diagnostics.icb_groups_fallback != 1 ||
+        diagnostics.icb_last_fallback_reason != MG_ICB_FALLBACK_INELIGIBLE_NODE) {
+        fprintf(stderr, "multi-dispatch exec should fall back until hazard analysis exists\n");
+        goto cleanup;
+    }
+    mgGraphExecDestroy(exec);
+    exec = NULL;
+
     mg_graph_t *unknown_graph = NULL;
     mg_node_t *unknown_node = NULL;
     mg_dispatch_desc_t unknown_desc = add_one_desc(icb_buffer);

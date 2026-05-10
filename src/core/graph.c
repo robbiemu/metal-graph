@@ -418,6 +418,14 @@ mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *
             return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
                                 MG_NODE_ID_INVALID, "dispatch buffer binding is invalid", NULL);
         }
+        for (uint32_t j = i + 1; j < desc->buffer_count; ++j) {
+            if (desc->buffers[i].index == desc->buffers[j].index) {
+                mg_node_clear(node);
+                free(node);
+                return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                                    MG_NODE_ID_INVALID, "duplicate dispatch buffer binding", NULL);
+            }
+        }
     }
 
     if (scalar_count > 0 && !scalars) {
