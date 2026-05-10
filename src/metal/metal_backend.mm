@@ -21,11 +21,14 @@ static mg_status_t mg_clone_dispatch(const mg_node_t *node, mg_exec_dispatch_t *
                                      mg_error_t **out_error) {
     memset(out_dispatch, 0, sizeof(*out_dispatch));
     out_dispatch->id = node->id;
+    out_dispatch->patch_flags = node->patch_flags;
     out_dispatch->metallib_path = mg_strdup(node->as.dispatch.metallib_path);
     out_dispatch->kernel_name = mg_strdup(node->as.dispatch.kernel_name);
     memcpy(out_dispatch->grid_size, node->as.dispatch.grid_size, sizeof(out_dispatch->grid_size));
     memcpy(out_dispatch->threads_per_threadgroup, node->as.dispatch.threads_per_threadgroup,
            sizeof(out_dispatch->threads_per_threadgroup));
+    memcpy(out_dispatch->max_grid_size, node->as.dispatch.max_grid_size,
+           sizeof(out_dispatch->max_grid_size));
 
     if (!out_dispatch->metallib_path || !out_dispatch->kernel_name) {
         return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
@@ -44,6 +47,27 @@ static mg_status_t mg_clone_dispatch(const mg_node_t *node, mg_exec_dispatch_t *
             mg_buffer_retain(out_dispatch->buffers[i].buffer);
         }
     }
+    if (node->as.dispatch.scalar_count > 0) {
+        out_dispatch->scalars = (mg_scalar_binding_t *)calloc(node->as.dispatch.scalar_count,
+                                                              sizeof(*out_dispatch->scalars));
+        if (!out_dispatch->scalars) {
+            return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
+        }
+        out_dispatch->scalar_count = node->as.dispatch.scalar_count;
+        for (uint32_t i = 0; i < out_dispatch->scalar_count; ++i) {
+            void *data = malloc(node->as.dispatch.scalars[i].byte_count);
+            if (!data) {
+                return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
+            }
+            memcpy(data, node->as.dispatch.scalars[i].data,
+                   node->as.dispatch.scalars[i].byte_count);
+            out_dispatch->scalars[i] = (mg_scalar_binding_t){
+                node->as.dispatch.scalars[i].index,
+                data,
+                node->as.dispatch.scalars[i].byte_count,
+            };
+        }
+    }
 
     return MG_STATUS_OK;
 }
@@ -56,6 +80,9 @@ static void mg_exec_dispatch_clear(mg_exec_dispatch_t *dispatch) {
     for (uint32_t i = 0; i < dispatch->buffer_count; ++i) {
         mg_buffer_release(dispatch->buffers[i].buffer);
     }
+    for (uint32_t i = 0; i < dispatch->scalar_count; ++i) {
+        free((void *)dispatch->scalars[i].data);
+    }
 
     if (dispatch->pipeline_impl) {
         id pipeline = (__bridge_transfer id)dispatch->pipeline_impl;
@@ -65,6 +92,7 @@ static void mg_exec_dispatch_clear(mg_exec_dispatch_t *dispatch) {
     free(dispatch->metallib_path);
     free(dispatch->kernel_name);
     free(dispatch->buffers);
+    free(dispatch->scalars);
     memset(dispatch, 0, sizeof(*dispatch));
 }
 
@@ -117,6 +145,7 @@ static mg_status_t mg_clone_exec_node(const mg_node_t *src, mg_exec_node_t *dst,
         return mg_clone_dispatch(src, &dst->as.dispatch, out_error);
     case MG_NODE_COPY:
         dst->as.copy.id = src->id;
+        dst->as.copy.patch_flags = src->patch_flags;
         dst->as.copy.src = src->as.copy.src;
         dst->as.copy.src_offset = src->as.copy.src_offset;
         dst->as.copy.dst = src->as.copy.dst;
@@ -127,6 +156,7 @@ static mg_status_t mg_clone_exec_node(const mg_node_t *src, mg_exec_node_t *dst,
         return MG_STATUS_OK;
     case MG_NODE_FILL:
         dst->as.fill.id = src->id;
+        dst->as.fill.patch_flags = src->patch_flags;
         dst->as.fill.dst = src->as.fill.dst;
         dst->as.fill.dst_offset = src->as.fill.dst_offset;
         dst->as.fill.byte_count = src->as.fill.byte_count;
@@ -136,6 +166,7 @@ static mg_status_t mg_clone_exec_node(const mg_node_t *src, mg_exec_node_t *dst,
     case MG_NODE_EVENT_WAIT:
     case MG_NODE_EVENT_SIGNAL:
         dst->as.event.id = src->id;
+        dst->as.event.patch_flags = src->patch_flags;
         dst->as.event.event = src->as.event.event;
         dst->as.event.value = src->as.event.value;
         mg_event_retain(dst->as.event.event);
@@ -614,6 +645,11 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
                 mg_buffer_retain(buffer);
                 launch->retained_buffers[launch->retained_buffer_count++] = buffer;
             }
+            for (uint32_t j = 0; j < dispatch->scalar_count; ++j) {
+                [encoder setBytes:dispatch->scalars[j].data
+                           length:dispatch->scalars[j].byte_count
+                          atIndex:dispatch->scalars[j].index];
+            }
 
             MTLSize grid =
                 MTLSizeMake(dispatch->grid_size[0], dispatch->grid_size[1], dispatch->grid_size[2]);
@@ -712,6 +748,8 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
     }
 
     [commandBuffer commit];
+    exec->in_flight_count++;
+    launch->exec = exec;
     *out_launch = launch;
     return MG_STATUS_OK;
 }
@@ -725,6 +763,12 @@ mg_status_t mgLaunchSynchronize(mg_launch_t *launch, mg_error_t **out_error) {
 
     id<MTLCommandBuffer> commandBuffer = (__bridge id<MTLCommandBuffer>)launch->impl;
     [commandBuffer waitUntilCompleted];
+    if (!launch->completed) {
+        if (launch->exec && launch->exec->in_flight_count > 0) {
+            launch->exec->in_flight_count--;
+        }
+        launch->completed = true;
+    }
     if (commandBuffer.status == MTLCommandBufferStatusError) {
         return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_COMPLETE,
                             MG_NODE_ID_INVALID, "Metal command buffer failed",

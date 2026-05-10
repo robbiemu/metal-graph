@@ -229,13 +229,196 @@ int main(void) {
     mg_workspace_plan_clear(&plan);
     mgGraphDestroy(plan_graph);
 
+    uint32_t scalar_value = 7;
+    uint32_t scalar_storage = scalar_value;
+    mg_buffer_t dispatch_buffer = {
+        NULL,
+        16,
+        1,
+    };
+    mg_buffer_t tiny_buffer = {
+        NULL,
+        4,
+        1,
+    };
+    mg_buffer_t copy_dst = {
+        NULL,
+        16,
+        1,
+    };
+    mg_exec_node_t patch_nodes[5];
+    memset(patch_nodes, 0, sizeof(patch_nodes));
+    patch_nodes[0].kind = MG_NODE_DISPATCH;
+    patch_nodes[0].as.dispatch.id = 100;
+    patch_nodes[0].as.dispatch.patch_flags = MG_PATCH_DISPATCH_GRID | MG_PATCH_DISPATCH_SCALAR;
+    patch_nodes[0].as.dispatch.grid_size[0] = 1;
+    patch_nodes[0].as.dispatch.grid_size[1] = 1;
+    patch_nodes[0].as.dispatch.grid_size[2] = 1;
+    patch_nodes[0].as.dispatch.max_grid_size[0] = 4;
+    patch_nodes[0].as.dispatch.max_grid_size[1] = 1;
+    patch_nodes[0].as.dispatch.max_grid_size[2] = 1;
+    mg_scalar_binding_t scalar_binding = {
+        1,
+        &scalar_storage,
+        sizeof(scalar_storage),
+    };
+    patch_nodes[0].as.dispatch.scalars = &scalar_binding;
+    patch_nodes[0].as.dispatch.scalar_count = 1;
+    mg_buffer_binding_t buffer_binding = {
+        0,
+        &dispatch_buffer,
+        0,
+    };
+    patch_nodes[0].as.dispatch.buffers = &buffer_binding;
+    patch_nodes[0].as.dispatch.buffer_count = 1;
+    patch_nodes[1].kind = MG_NODE_COPY;
+    patch_nodes[1].as.copy.id = 101;
+    patch_nodes[1].as.copy.patch_flags = MG_PATCH_COPY_RANGE;
+    patch_nodes[1].as.copy.src = &dispatch_buffer;
+    patch_nodes[1].as.copy.dst = &copy_dst;
+    patch_nodes[1].as.copy.byte_count = 4;
+    patch_nodes[2].kind = MG_NODE_FILL;
+    patch_nodes[2].as.fill.id = 102;
+    patch_nodes[2].as.fill.patch_flags = MG_PATCH_FILL_VALUE;
+    patch_nodes[2].as.fill.dst = &copy_dst;
+    patch_nodes[2].as.fill.byte_count = 4;
+    patch_nodes[2].as.fill.value = 0x11;
+    patch_nodes[3].kind = MG_NODE_EVENT_SIGNAL;
+    patch_nodes[3].as.event.id = 103;
+    patch_nodes[3].as.event.patch_flags = 0;
+    patch_nodes[3].as.event.value = 1;
+    patch_nodes[4].kind = MG_NODE_EVENT_WAIT;
+    patch_nodes[4].as.event.id = 104;
+    patch_nodes[4].as.event.patch_flags = MG_PATCH_EVENT_VALUE;
+    patch_nodes[4].as.event.value = 2;
+    mg_graph_exec_t patch_exec;
+    memset(&patch_exec, 0, sizeof(patch_exec));
+    patch_exec.nodes = patch_nodes;
+    patch_exec.node_count = 5;
+
+    uint32_t new_grid[3] = {2, 1, 1};
+    uint32_t too_large_grid[3] = {5, 1, 1};
+    uint64_t wrong_scalar = 9;
+    if (expect_status(mgGraphExecPatchDispatchGrid(NULL, 100, new_grid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject null patch exec") ||
+        expect_status(mgGraphExecPatchDispatchGrid(&patch_exec, 999, new_grid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject unknown patch node") ||
+        expect_status(mgGraphExecPatchDispatchGrid(&patch_exec, 101, new_grid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject wrong patch node kind") ||
+        expect_status(
+            mgGraphExecPatchDispatchBuffer(&patch_exec, 100, 0, &dispatch_buffer, 0, &error),
+            MG_STATUS_INVALID_ARGUMENT, "reject non-patchable dispatch buffer") ||
+        expect_status(mgGraphExecPatchDispatchScalar(&patch_exec, 100, 1, &wrong_scalar,
+                                                     sizeof(wrong_scalar), &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject wrong scalar size") ||
+        expect_status(mgGraphExecPatchDispatchGrid(&patch_exec, 100, too_large_grid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject grid beyond declared bounds")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 19;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+    if (patch_nodes[0].as.dispatch.grid_size[0] != 1 || scalar_storage != scalar_value) {
+        fprintf(stderr, "failed patch should preserve previous dispatch defaults\n");
+        mgGraphDestroy(graph);
+        return 20;
+    }
+
+    if (expect_status(mgGraphExecPatchDispatchGrid(&patch_exec, 100, new_grid, &error),
+                      MG_STATUS_OK, "patch dispatch grid")) {
+        mgGraphDestroy(graph);
+        return 21;
+    }
+    if (expect_status(mgGraphExecPatchDispatchGrid(&patch_exec, 100, too_large_grid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject invalid grid after successful patch")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 22;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+    if (patch_nodes[0].as.dispatch.grid_size[0] != 2) {
+        fprintf(stderr, "failed patch should preserve previously patched dispatch grid\n");
+        mgGraphDestroy(graph);
+        return 23;
+    }
+
+    patch_nodes[0].as.dispatch.patch_flags |= MG_PATCH_DISPATCH_BUFFER;
+    if (expect_status(mgGraphExecPatchDispatchBuffer(&patch_exec, 100, 0, &tiny_buffer, 8, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject incompatible dispatch buffer")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 22;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    mg_copy_desc_t bad_copy_patch;
+    memset(&bad_copy_patch, 0, sizeof(bad_copy_patch));
+    bad_copy_patch.size = sizeof(bad_copy_patch);
+    bad_copy_patch.src = &dispatch_buffer;
+    bad_copy_patch.dst = &copy_dst;
+    bad_copy_patch.byte_count = 32;
+    if (expect_status(mgGraphExecPatchCopyNode(&patch_exec, 101, &bad_copy_patch, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject invalid copy range")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 23;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    mg_fill_desc_t fill_patch;
+    memset(&fill_patch, 0, sizeof(fill_patch));
+    fill_patch.size = sizeof(fill_patch);
+    fill_patch.dst = &copy_dst;
+    fill_patch.byte_count = 4;
+    fill_patch.value = 0x22;
+    if (expect_status(mgGraphExecPatchFillNode(&patch_exec, 102, &fill_patch, &error), MG_STATUS_OK,
+                      "patch fill value")) {
+        mgGraphDestroy(graph);
+        return 24;
+    }
+
+    if (expect_status(mgGraphExecPatchEventValue(&patch_exec, 103, 2, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject non-patchable event value")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 25;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+    patch_nodes[3].as.event.patch_flags = MG_PATCH_EVENT_VALUE;
+    if (expect_status(mgGraphExecPatchEventValue(&patch_exec, 103, 2, &error), MG_STATUS_OK,
+                      "patch event value")) {
+        mgGraphDestroy(graph);
+        return 26;
+    }
+    if (expect_status(mgGraphExecPatchEventValue(&patch_exec, 104, 3, &error), MG_STATUS_OK,
+                      "patch event wait value")) {
+        mgGraphDestroy(graph);
+        return 27;
+    }
+
+    patch_exec.in_flight_count = 1;
+    if (expect_status(mgGraphExecPatchDispatchGrid(&patch_exec, 100, new_grid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject in-flight patch")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 27;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+    patch_exec.in_flight_count = 0;
+
     mg_dispatch_desc_t invalid_desc = test_dispatch_desc();
     invalid_desc.size = 0;
     if (expect_status(mgGraphAddDispatchNode(graph, &invalid_desc, &invalid, &error),
                       MG_STATUS_INVALID_ARGUMENT, "reject short dispatch descriptor")) {
         mgErrorDestroy(error);
         mgGraphDestroy(graph);
-        return 19;
+        return 28;
     }
     mgErrorDestroy(error);
     error = NULL;
@@ -248,7 +431,7 @@ int main(void) {
                       MG_STATUS_INVALID_ARGUMENT, "reject invalid buffer binding")) {
         mgErrorDestroy(error);
         mgGraphDestroy(graph);
-        return 20;
+        return 29;
     }
     mgErrorDestroy(error);
     error = NULL;
@@ -261,20 +444,20 @@ int main(void) {
         expect_status(mgGraphAddDispatchNode(graph, &desc, &second, &error), MG_STATUS_OK,
                       "add second node")) {
         mgGraphDestroy(graph);
-        return 21;
+        return 30;
     }
 
     if (mgNodeId(first) == MG_NODE_ID_INVALID || mgNodeId(second) == MG_NODE_ID_INVALID) {
         fprintf(stderr, "node ids should be valid\n");
         mgGraphDestroy(graph);
-        return 22;
+        return 31;
     }
 
     if (expect_status(mgGraphAddDependency(graph, first, first, &error), MG_STATUS_INVALID_TOPOLOGY,
                       "reject self dependency")) {
         mgErrorDestroy(error);
         mgGraphDestroy(graph);
-        return 23;
+        return 32;
     }
     mgErrorDestroy(error);
     error = NULL;
@@ -285,27 +468,27 @@ int main(void) {
                       "ignore duplicate dependency") ||
         expect_status(mgGraphValidate(graph, &error), MG_STATUS_OK, "validate acyclic graph")) {
         mgGraphDestroy(graph);
-        return 24;
+        return 33;
     }
 
     mg_status_t cycle_status = mgGraphAddDependency(graph, second, first, &error);
     if (expect_status(cycle_status, MG_STATUS_OK, "add cycle edge")) {
         mgGraphDestroy(graph);
-        return 25;
+        return 34;
     }
 
     cycle_status = mgGraphValidate(graph, &error);
     if (expect_status(cycle_status, MG_STATUS_INVALID_TOPOLOGY, "validate cyclic graph")) {
         mgErrorDestroy(error);
         mgGraphDestroy(graph);
-        return 26;
+        return 35;
     }
 
     if (mgErrorStage(error) != MG_ERROR_STAGE_VALIDATE) {
         fprintf(stderr, "cycle error should come from validate stage\n");
         mgErrorDestroy(error);
         mgGraphDestroy(graph);
-        return 27;
+        return 36;
     }
 
     mgErrorDestroy(error);

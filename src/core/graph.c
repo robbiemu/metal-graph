@@ -53,6 +53,29 @@ static bool mg_range_valid(size_t length, size_t offset, size_t byte_count) {
     return byte_count > 0 && offset <= length && byte_count <= length - offset;
 }
 
+static bool mg_patch_flags_allowed(mg_node_kind_t kind, mg_patch_flags_t flags) {
+    mg_patch_flags_t allowed = 0;
+    switch (kind) {
+    case MG_NODE_DISPATCH:
+        allowed = MG_PATCH_DISPATCH_GRID | MG_PATCH_DISPATCH_BUFFER | MG_PATCH_DISPATCH_SCALAR;
+        break;
+    case MG_NODE_COPY:
+        allowed = MG_PATCH_COPY_BUFFER | MG_PATCH_COPY_RANGE;
+        break;
+    case MG_NODE_FILL:
+        allowed = MG_PATCH_FILL_BUFFER | MG_PATCH_FILL_RANGE | MG_PATCH_FILL_VALUE;
+        break;
+    case MG_NODE_EVENT_WAIT:
+    case MG_NODE_EVENT_SIGNAL:
+        allowed = MG_PATCH_EVENT_VALUE;
+        break;
+    default:
+        allowed = 0;
+        break;
+    }
+    return (flags & ~allowed) == 0;
+}
+
 static mg_status_t mg_graph_alloc_node(mg_graph_t *graph, mg_node_kind_t kind, mg_node_t **out_node,
                                        mg_error_t **out_error) {
     mg_status_t status = mg_graph_reserve_nodes(graph, graph->node_count + 1, out_error);
@@ -86,10 +109,14 @@ void mg_dispatch_node_clear(mg_dispatch_node_t *dispatch) {
     for (uint32_t i = 0; i < dispatch->buffer_count; ++i) {
         mg_buffer_release(dispatch->buffers[i].buffer);
     }
+    for (uint32_t i = 0; i < dispatch->scalar_count; ++i) {
+        free((void *)dispatch->scalars[i].data);
+    }
 
     free(dispatch->metallib_path);
     free(dispatch->kernel_name);
     free(dispatch->buffers);
+    free(dispatch->scalars);
     memset(dispatch, 0, sizeof(*dispatch));
 }
 
@@ -182,6 +209,23 @@ mg_status_t mgGraphSetArena(mg_graph_t *graph, mg_arena_t *arena, mg_error_t **o
     return MG_STATUS_OK;
 }
 
+mg_status_t mgGraphSetNodePatchFlags(mg_graph_t *graph, mg_node_t *node, mg_patch_flags_t flags,
+                                     mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (!graph || !node || node->graph != graph) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "node must belong to graph", NULL);
+    }
+
+    if (!mg_patch_flags_allowed(node->kind, flags)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE, node->id,
+                            "patch flags are not compatible with node kind", NULL);
+    }
+
+    node->patch_flags = flags;
+    return MG_STATUS_OK;
+}
+
 mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *desc,
                                    mg_node_t **out_node, mg_error_t **out_error) {
     mg_clear_error(out_error);
@@ -194,10 +238,13 @@ mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *
                             MG_NODE_ID_INVALID, "graph, desc, and out_node are required", NULL);
     }
 
-    if (desc->size < sizeof(*desc)) {
+    if (desc->size < offsetof(mg_dispatch_desc_t, scalars)) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
                             MG_NODE_ID_INVALID, "dispatch descriptor size is invalid", NULL);
     }
+    bool has_phase3_fields = desc->size >= sizeof(*desc);
+    const mg_scalar_binding_t *scalars = has_phase3_fields ? desc->scalars : NULL;
+    uint32_t scalar_count = has_phase3_fields ? desc->scalar_count : 0;
 
     if (!desc->metallib_path || !desc->kernel_name || !mg_dims_valid(desc->grid_size) ||
         !mg_dims_valid(desc->threads_per_threadgroup)) {
@@ -221,6 +268,14 @@ mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *
     memcpy(node->as.dispatch.grid_size, desc->grid_size, sizeof(node->as.dispatch.grid_size));
     memcpy(node->as.dispatch.threads_per_threadgroup, desc->threads_per_threadgroup,
            sizeof(node->as.dispatch.threads_per_threadgroup));
+    if (has_phase3_fields) {
+        memcpy(node->as.dispatch.max_grid_size, desc->max_grid_size,
+               sizeof(node->as.dispatch.max_grid_size));
+    }
+    if (!mg_dims_valid(node->as.dispatch.max_grid_size)) {
+        memcpy(node->as.dispatch.max_grid_size, desc->grid_size,
+               sizeof(node->as.dispatch.max_grid_size));
+    }
 
     if (!node->as.dispatch.metallib_path || !node->as.dispatch.kernel_name) {
         mg_node_clear(node);
@@ -237,6 +292,29 @@ mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *
         }
     }
 
+    if (scalar_count > 0 && !scalars) {
+        mg_node_clear(node);
+        free(node);
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "dispatch scalar bindings are required", NULL);
+    }
+    for (uint32_t i = 0; i < scalar_count; ++i) {
+        if (!scalars[i].data || scalars[i].byte_count == 0) {
+            mg_node_clear(node);
+            free(node);
+            return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                                MG_NODE_ID_INVALID, "dispatch scalar binding is invalid", NULL);
+        }
+    }
+    for (uint32_t axis = 0; axis < 3; ++axis) {
+        if (node->as.dispatch.grid_size[axis] > node->as.dispatch.max_grid_size[axis]) {
+            mg_node_clear(node);
+            free(node);
+            return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                                MG_NODE_ID_INVALID, "dispatch grid exceeds declared maximum", NULL);
+        }
+    }
+
     if (desc->buffer_count > 0) {
         size_t bytes = sizeof(*node->as.dispatch.buffers) * desc->buffer_count;
         node->as.dispatch.buffers = (mg_buffer_binding_t *)malloc(bytes);
@@ -250,6 +328,31 @@ mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *
         node->as.dispatch.buffer_count = desc->buffer_count;
         for (uint32_t i = 0; i < desc->buffer_count; ++i) {
             mg_buffer_retain(node->as.dispatch.buffers[i].buffer);
+        }
+    }
+    if (scalar_count > 0) {
+        node->as.dispatch.scalars =
+            (mg_scalar_binding_t *)calloc(scalar_count, sizeof(*node->as.dispatch.scalars));
+        if (!node->as.dispatch.scalars) {
+            mg_node_clear(node);
+            free(node);
+            return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
+        }
+
+        node->as.dispatch.scalar_count = scalar_count;
+        for (uint32_t i = 0; i < scalar_count; ++i) {
+            void *data = malloc(scalars[i].byte_count);
+            if (!data) {
+                mg_node_clear(node);
+                free(node);
+                return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
+            }
+            memcpy(data, scalars[i].data, scalars[i].byte_count);
+            node->as.dispatch.scalars[i] = (mg_scalar_binding_t){
+                scalars[i].index,
+                data,
+                scalars[i].byte_count,
+            };
         }
     }
 
