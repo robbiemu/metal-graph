@@ -177,6 +177,84 @@ Future work:
 - per-group diagnostics instead of last/global fallback reason;
 - broader dispatch resource contracts for hazard analysis.
 
+### Benchmark Evidence Claim Boundaries
+
+The optional evidence suite is required for semver-moving pull requests, but its claims are
+intentionally narrow.
+
+The suite demonstrates **amortized host/runtime orchestration gains** for stable Metal workloads. It
+does not claim that Metal Graph is universally faster than every possible hand-written Metal
+implementation.
+
+A fair baseline is ordinary, competent direct Metal code:
+
+- pipelines and static Metal objects may be cached;
+- each measured iteration creates a command buffer;
+- each measured iteration creates the needed encoder or encoders;
+- each measured iteration binds resources and scalar parameters;
+- each measured iteration encodes dispatch, copy, fill, event, or mixed work;
+- each measured iteration commits and synchronizes or observes completion.
+
+A baseline must not secretly implement a private graph-equivalent runtime. In particular, it must
+not precompute reusable dependency schedules, patch tables, resource-retention plans, persistent
+graph execution plans, or ICB replay structures unless the case is explicitly labeled as a
+bespoke-executor comparison.
+
+The candidate measures Metal Graph behavior:
+
+- graph construction cost, when included;
+- one-time graph instantiation cost;
+- repeated `mg_graph_exec_t` launch cost;
+- patch/update cost where applicable;
+- correctness after repeated launches;
+- backend diagnostics and fallback behavior for optional MPSGraph, MLX, ICB, or other feature
+  paths.
+
+Every report must separate at least these values when applicable:
+
+```text
+baseline_encode_and_launch_time
+metal_graph_instantiate_time
+metal_graph_patch_time
+metal_graph_repeated_launch_time
+per_launch_savings
+break_even_launches
+```
+
+The break-even point must be reported explicitly:
+
+```text
+break_even_launches = metal_graph_instantiate_time / per_launch_savings
+```
+
+If `per_launch_savings <= 0`, the report must say that no launch-count break-even was observed for
+that case.
+
+The suite may support claims that Metal Graph reduces repeated-launch host orchestration overhead,
+amortizes planning and resource-binding work across many launches, reduces Python-to-native
+orchestration overhead through reusable graph executables, or preserves correct fallback behavior
+for optional backends.
+
+The suite must not, by itself, claim that Metal Graph makes individual GPU kernels faster, beats
+hand-fused kernels, beats a bespoke executor that manually reproduces graph planning, or improves
+all Metal workloads.
+
+Each evidence case should include a claim-boundary note with this shape:
+
+```text
+This case may support:
+  - the specific orchestration, patching, interop, or fallback claim measured by this case
+
+This case may not support:
+  - faster individual kernel execution
+  - superiority over hand-fused kernels
+  - superiority over bespoke graph-equivalent runtimes
+  - universal Metal performance claims
+```
+
+This keeps benchmark artifacts useful for review without letting them become broader performance
+claims than the measurements justify.
+
 ### MPSGraph Integration Direction
 
 Phase 5 raises an apparent layering question: MPSGraph is a higher-level tensor graph API, while

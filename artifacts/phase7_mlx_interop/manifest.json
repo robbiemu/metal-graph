@@ -1,0 +1,20 @@
+{
+  "artifact": "phase7_mlx_interop",
+  "schema_version": 1,
+  "phase": "v0.2-phase-7",
+  "status": "unsupported_public_api",
+  "git_sha": "14e7a64047cd62215977cf7b968edc4b5ee485ab",
+  "generated_at": "2026-05-10",
+  "build_flags": {
+    "MG_ENABLE_MLX_ADAPTER": "optional",
+    "MG_ENABLE_MPSGRAPH": "unchanged"
+  },
+  "case_id": "MG-P7-MLX-Zero-Copy-Interop",
+  "guidance_document": "docs/phases/phase-7-mlx-zero-copy.md",
+  "artifacts": {
+    "environment": "environment.json",
+    "results": "results.json",
+    "report": "report.md",
+    "unsupported": "skip_or_unsupported.json"
+  }
+}

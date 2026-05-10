@@ -1,3 +1,5 @@
+import gc
+import weakref
 from pathlib import Path
 
 import metal_graph as mg
@@ -14,8 +16,39 @@ def test_version_and_status():
 
 
 def test_mlx_zero_copy_import_is_explicitly_unsupported():
-    with pytest.raises(mg.UnsupportedWorkflowError, match="MLX array zero-copy import"):
+    support = mg.can_import_mlx_array(object())
+    assert not support
+    assert support.mode == "zero_copy"
+    assert not support.shared_storage
+    assert "zero-copy" in support.reason
+
+    with pytest.raises(mg.UnsupportedWorkflowError, match="zero-copy import is unsupported"):
+        mg.import_mlx_array(object(), mode="zero_copy")
+
+    with pytest.raises(mg.UnsupportedWorkflowError, match="zero-copy import is unsupported"):
         mg.from_mlx_array(object())
+
+
+def test_optional_mlx_check_is_gated_when_mlx_is_absent_or_present():
+    if not mg.mlx_available():
+        support = mg.can_import_mlx_array(object())
+        assert not support
+        assert "MLX is not installed" in support.reason
+        pytest.skip("MLX is not installed")
+
+    import mlx.core as mx
+
+    array = mx.zeros((4,), dtype=mx.uint32)
+    support = mg.can_import_mlx_array(array)
+    assert not support
+    assert "public MLX Python API" in support.reason
+
+
+def test_mlx_copy_mode_requires_contiguous_source():
+    source = memoryview(bytearray(range(8)))[::2]
+    support = mg.can_import_mlx_array(source, mode="copy")
+    assert not support
+    assert "contiguous" in support.reason
 
 
 def test_failed_c_api_call_raises_metal_graph_error():
@@ -43,6 +76,50 @@ def test_failed_c_api_call_raises_metal_graph_error():
                     )
 
                 assert error_info.value.status == mg.MG_STATUS_INVALID_ARGUMENT
+
+
+def test_explicit_mlx_copy_import_does_not_claim_zero_copy():
+    try:
+        device = mg.Device.system_default()
+    except mg.MetalGraphError as exc:
+        if exc.status == mg.MG_STATUS_UNSUPPORTED:
+            pytest.skip("no system default Metal device")
+        raise
+
+    with device:
+        source = bytearray((1, 0, 0, 0, 2, 0, 0, 0))
+        with mg.import_mlx_array(source, mode="copy", device=device) as buffer:
+            assert buffer.import_mode == "copy"
+            assert not buffer.is_zero_copy
+            assert buffer.read_uint32s(2) == [1, 2]
+
+            source[:] = b"\x09\x00\x00\x00\x09\x00\x00\x00"
+            assert buffer.read_uint32s(2) == [1, 2]
+
+
+def test_explicit_mlx_copy_import_retains_source_owner_while_buffer_lives():
+    try:
+        device = mg.Device.system_default()
+    except mg.MetalGraphError as exc:
+        if exc.status == mg.MG_STATUS_UNSUPPORTED:
+            pytest.skip("no system default Metal device")
+        raise
+
+    class Source(bytearray):
+        pass
+
+    with device:
+        source = Source((1, 0, 0, 0))
+        source_ref = weakref.ref(source)
+        buffer = mg.import_mlx_array(source, mode="copy", device=device)
+        del source
+        gc.collect()
+
+        try:
+            assert source_ref() is not None
+            assert buffer.read_uint32s(1) == [1]
+        finally:
+            buffer.close()
 
 
 def test_python_adapter_dispatch_workflow():

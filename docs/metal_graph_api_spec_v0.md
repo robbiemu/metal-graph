@@ -260,3 +260,32 @@ adapter-level errors rather than silently changing Metal Graph semantics.
 
 `MG_ENABLE_MLX_ADAPTER` controls the optional CMake shared-library target used by the Python adapter.
 Core CMake builds and tests must continue to pass with this option disabled.
+
+## Phase 7 Direction
+
+Phase 7 evaluates MLX array buffer import as an optional Python adapter feature. The core C runtime
+must remain independent of Python and MLX, and public C headers must not expose MLX objects, Python
+objects, Objective-C types, Swift types, C++ types, or private backend handles.
+
+The desired zero-copy path is a Python adapter operation that returns the existing `Buffer` wrapper
+for an `mg_buffer_t` whose storage is shared with a compatible MLX array. Zero-copy means shared
+storage. A copied buffer must not be labeled zero-copy.
+
+The current public MLX Python API exposes array metadata and conversion through Python buffer
+protocol/DLPack, but does not expose enough stable storage information to safely retain and validate
+an underlying Metal buffer, byte offset/range, and device identity. Therefore the Phase 7 adapter
+must reject `mode="zero_copy"` clearly instead of using private MLX internals.
+
+The adapter may provide an explicit `mode="copy"` fallback. Copy fallback creates an independent
+Metal Graph-owned shared buffer, requires caller opt-in, and reports that the returned buffer is not
+zero-copy.
+
+Future real zero-copy support must preserve these rules:
+
+- the adapter retains the source MLX array while the returned `mg_buffer_t` wrapper exists;
+- launches retain all `mg_buffer_t` resources they need until completion;
+- synchronization remains explicit;
+- after Metal Graph writes to an imported MLX buffer, users must synchronize the Metal Graph launch
+  before reading from MLX/Python;
+- unsupported dtype, layout, device, range, mutability, lifetime, or synchronization cases fail
+  clearly.

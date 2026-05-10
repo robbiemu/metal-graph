@@ -1,0 +1,12 @@
+{
+  "status": "unsupported_public_api",
+  "skipped": false,
+  "unsupported": true,
+  "missing_public_api": [
+    "stable underlying Metal buffer or equivalent storage handle",
+    "byte offset and byte range into the backing storage",
+    "Metal device identity compatible with mg_device_t",
+    "mutability and lifetime ownership contract for in-flight launches"
+  ],
+  "required_before_supported_zero_copy": "Add a public MLX storage export path or a deliberately supported interop shim that can be retained, range-checked, device-checked, and synchronized without private internals."
+}
