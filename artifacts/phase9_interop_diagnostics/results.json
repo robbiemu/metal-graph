@@ -1,0 +1,14 @@
+{
+  "phase": "phase-9-interop-diagnostics",
+  "adapter_import": "pass",
+  "mlx_zero_copy_status": "unsupported_public_api",
+  "mlx_zero_copy_rejection_diagnostic": "pass",
+  "explicit_copy_diagnostic": "pass",
+  "sync_guidance_documented": "pass",
+  "mpsgraph_optional_status_documented": "pass",
+  "icb_disabled_status_documented": "pass",
+  "icb_fallback_status_documented": "pass",
+  "core_build_unaffected": "pass",
+  "adapter_disabled_build_unaffected": "pass",
+  "performance_claims": "none"
+}

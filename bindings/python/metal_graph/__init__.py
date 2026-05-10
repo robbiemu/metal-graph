@@ -27,6 +27,24 @@ MG_RESOURCE_ACCESS_READ = 1
 MG_RESOURCE_ACCESS_WRITE = 2
 MG_RESOURCE_ACCESS_READ_WRITE = 3
 
+MG_ICB_FALLBACK_NONE = 0
+MG_ICB_FALLBACK_DISABLED = 1
+MG_ICB_FALLBACK_UNSUPPORTED = 2
+MG_ICB_FALLBACK_INELIGIBLE_NODE = 3
+MG_ICB_FALLBACK_UNKNOWN_RESOURCE_ACCESS = 4
+MG_ICB_FALLBACK_PATCHABLE_FIELD = 5
+MG_ICB_FALLBACK_BACKEND_ERROR = 6
+
+_ICB_FALLBACK_REASON_NAMES = {
+    MG_ICB_FALLBACK_NONE: "none",
+    MG_ICB_FALLBACK_DISABLED: "disabled",
+    MG_ICB_FALLBACK_UNSUPPORTED: "unsupported",
+    MG_ICB_FALLBACK_INELIGIBLE_NODE: "ineligible_node",
+    MG_ICB_FALLBACK_UNKNOWN_RESOURCE_ACCESS: "unknown_resource_access",
+    MG_ICB_FALLBACK_PATCHABLE_FIELD: "patchable_field",
+    MG_ICB_FALLBACK_BACKEND_ERROR: "backend_error",
+}
+
 
 class MetalGraphError(RuntimeError):
     """Exception raised for non-OK Metal Graph status codes."""
@@ -52,6 +70,84 @@ class MetalGraphError(RuntimeError):
 class UnsupportedWorkflowError(MetalGraphError):
     """Raised when a Python/MLX adapter workflow is unsupported or unsafe."""
 
+    def __init__(self, *args, diagnostic: InteropDiagnostic | None = None, **kwargs) -> None:
+        self.diagnostic = diagnostic
+        super().__init__(*args, **kwargs)
+
+
+@dataclass(frozen=True)
+class InteropDiagnostic:
+    """Stable adapter-level diagnostic for optional interop paths."""
+
+    path: str
+    source: str
+    reason: str
+    requires_synchronization: bool
+    is_zero_copy: bool
+    is_optional: bool
+    message: str = ""
+    copy_fallback_available: bool = False
+    synchronization: str = ""
+    resource_retention: str = ""
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            "source": self.source,
+            "reason": self.reason,
+            "requires_synchronization": self.requires_synchronization,
+            "is_zero_copy": self.is_zero_copy,
+            "is_optional": self.is_optional,
+            "message": self.message,
+            "copy_fallback_available": self.copy_fallback_available,
+            "synchronization": self.synchronization,
+            "resource_retention": self.resource_retention,
+        }
+
+
+@dataclass(frozen=True)
+class GraphExecDiagnostics:
+    """Thin Python view of existing graph-exec diagnostics."""
+
+    icb_available: bool
+    icb_enabled: bool
+    icb_groups_planned: int
+    icb_groups_used: int
+    icb_groups_fallback: int
+    icb_last_fallback_reason: str
+
+    def icb_diagnostic(self) -> InteropDiagnostic:
+        if not self.icb_enabled:
+            path = "disabled"
+            reason = "backend_feature_disabled"
+            message = "ICB optimization was disabled for this graph exec."
+        elif not self.icb_available:
+            path = "unavailable"
+            reason = "backend_feature_unavailable"
+            message = "ICB optimization is unavailable on this backend or graph."
+        elif self.icb_groups_used > 0:
+            path = "selected"
+            reason = "not_attempted"
+            message = "ICB optimization was selected for at least one planned group."
+        elif self.icb_groups_fallback > 0:
+            path = "fallback"
+            reason = "fallback_selected"
+            message = f"ICB fell back to direct encoding: {self.icb_last_fallback_reason}."
+        else:
+            path = "not_applicable"
+            reason = "not_attempted"
+            message = "No ICB fallback was observed."
+
+        return InteropDiagnostic(
+            path=path,
+            source="icb",
+            reason=reason,
+            requires_synchronization=False,
+            is_zero_copy=False,
+            is_optional=True,
+            message=message,
+        )
+
 
 @dataclass(frozen=True)
 class MlxImportSupport:
@@ -61,6 +157,8 @@ class MlxImportSupport:
     mode: str
     shared_storage: bool
     reason: str
+    status: str = ""
+    diagnostic: InteropDiagnostic | None = None
 
     def __bool__(self) -> bool:
         return self.supported
@@ -103,6 +201,18 @@ class _DispatchDesc(ctypes.Structure):
         ("max_grid_size", ctypes.c_uint32 * 3),
         ("resources", ctypes.POINTER(_DispatchResourceDesc)),
         ("resource_count", ctypes.c_uint32),
+    ]
+
+
+class _GraphExecDiagnostics(ctypes.Structure):
+    _fields_ = [
+        ("size", ctypes.c_size_t),
+        ("icb_available", ctypes.c_uint32),
+        ("icb_enabled", ctypes.c_uint32),
+        ("icb_groups_planned", ctypes.c_uint32),
+        ("icb_groups_used", ctypes.c_uint32),
+        ("icb_groups_fallback", ctypes.c_uint32),
+        ("icb_last_fallback_reason", ctypes.c_int),
     ]
 
 
@@ -279,6 +389,12 @@ def _configure_library(lib: ctypes.CDLL) -> None:
     ]
     lib.mgGraphInstantiate.restype = ctypes.c_int
     lib.mgGraphExecDestroy.argtypes = [ctypes.c_void_p]
+    lib.mgGraphExecGetDiagnostics.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(_GraphExecDiagnostics),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    lib.mgGraphExecGetDiagnostics.restype = ctypes.c_int
 
     lib.mgGraphLaunch.argtypes = [
         ctypes.c_void_p,
@@ -395,11 +511,13 @@ class Buffer(_Handle):
         source_owner=None,
         import_mode: str = "metal_graph",
         shared_storage: bool = False,
+        diagnostic: InteropDiagnostic | None = None,
     ) -> None:
         super().__init__(handle)
         self._source_owner = source_owner
         self._import_mode = import_mode
         self._shared_storage = shared_storage
+        self._diagnostic = diagnostic
 
     @classmethod
     def shared(cls, device: Device, length: int) -> Buffer:
@@ -453,6 +571,31 @@ class Buffer(_Handle):
     @property
     def is_zero_copy(self) -> bool:
         return self._shared_storage
+
+    @property
+    def diagnostic(self) -> InteropDiagnostic:
+        if self._diagnostic is not None:
+            return self._diagnostic
+        return InteropDiagnostic(
+            path="not_applicable",
+            source="metal_graph",
+            reason="not_attempted",
+            requires_synchronization=True,
+            is_zero_copy=False,
+            is_optional=False,
+            message=(
+                "Metal Graph-owned buffers require explicit launch synchronization before host "
+                "reads after GPU writes."
+            ),
+            synchronization=(
+                "call Launch.synchronize() before reading host-visible results after Metal Graph "
+                "writes"
+            ),
+            resource_retention=(
+                "GraphExec and Launch retain bound mg_buffer_t resources according to the C "
+                "runtime contract"
+            ),
+        )
 
 
 class Node:
@@ -540,6 +683,25 @@ class GraphExec(_Handle):
         _check(status, error)
         return Launch(out)
 
+    def diagnostics(self) -> GraphExecDiagnostics:
+        raw = _GraphExecDiagnostics()
+        raw.size = ctypes.sizeof(_GraphExecDiagnostics)
+        error = ctypes.c_void_p()
+        status = _load_library().mgGraphExecGetDiagnostics(
+            self._handle, ctypes.byref(raw), ctypes.byref(error)
+        )
+        _check(status, error)
+        return GraphExecDiagnostics(
+            icb_available=bool(raw.icb_available),
+            icb_enabled=bool(raw.icb_enabled),
+            icb_groups_planned=int(raw.icb_groups_planned),
+            icb_groups_used=int(raw.icb_groups_used),
+            icb_groups_fallback=int(raw.icb_groups_fallback),
+            icb_last_fallback_reason=_ICB_FALLBACK_REASON_NAMES.get(
+                int(raw.icb_last_fallback_reason), "unknown"
+            ),
+        )
+
 
 class Launch(_Handle):
     _destroy = "mgLaunchDestroy"
@@ -565,6 +727,75 @@ _ZERO_COPY_UNSUPPORTED_REASON = (
 )
 
 
+def _mlx_zero_copy_diagnostic(reason: str | None = None) -> InteropDiagnostic:
+    return InteropDiagnostic(
+        path="unsupported",
+        source="mlx",
+        reason="unsupported_public_api",
+        requires_synchronization=False,
+        is_zero_copy=False,
+        is_optional=True,
+        message=reason or _ZERO_COPY_UNSUPPORTED_REASON,
+        copy_fallback_available=True,
+        synchronization=(
+            "no zero-copy synchronization contract applies because shared storage is not available"
+        ),
+        resource_retention=(
+            "future zero-copy support must retain the source MLX array while the buffer wrapper "
+            "exists"
+        ),
+    )
+
+
+def _mlx_absent_diagnostic() -> InteropDiagnostic:
+    return InteropDiagnostic(
+        path="skipped",
+        source="mlx",
+        reason="missing_optional_dependency",
+        requires_synchronization=False,
+        is_zero_copy=False,
+        is_optional=True,
+        message="MLX is not installed; zero-copy MLX import cannot be evaluated.",
+        copy_fallback_available=True,
+    )
+
+
+def _explicit_copy_diagnostic() -> InteropDiagnostic:
+    return InteropDiagnostic(
+        path="copy",
+        source="python",
+        reason="explicit_copy_requested",
+        requires_synchronization=False,
+        is_zero_copy=False,
+        is_optional=True,
+        message=(
+            "mode='copy' creates independent Metal Graph-owned storage and does not share "
+            "MLX-visible memory."
+        ),
+        copy_fallback_available=True,
+        synchronization=(
+            "no MLX-visible result is promised; synchronize Metal Graph launches before reading "
+            "through Metal Graph host-visible buffers"
+        ),
+        resource_retention=(
+            "the Python Buffer wrapper retains the source owner; launches retain bound mg_buffer_t "
+            "resources"
+        ),
+    )
+
+
+def _reject_diagnostic(reason: str) -> InteropDiagnostic:
+    return InteropDiagnostic(
+        path="reject",
+        source="python",
+        reason=reason,
+        requires_synchronization=False,
+        is_zero_copy=False,
+        is_optional=True,
+        message=reason,
+    )
+
+
 def _memoryview_for_explicit_copy(array) -> memoryview:
     try:
         view = memoryview(array)
@@ -575,6 +806,7 @@ def _memoryview_for_explicit_copy(array) -> memoryview:
                 "mode='copy' requires an MLX array or another object exposing the Python "
                 "buffer protocol"
             ),
+            diagnostic=_reject_diagnostic("unsupported_object_type"),
         ) from exc
 
     if view.nbytes == 0:
@@ -586,6 +818,7 @@ def _memoryview_for_explicit_copy(array) -> memoryview:
         raise UnsupportedWorkflowError(
             MG_STATUS_UNSUPPORTED,
             message="mode='copy' requires a contiguous source buffer",
+            diagnostic=_reject_diagnostic("unsupported_layout"),
         )
     return view.cast("B")
 
@@ -595,13 +828,19 @@ def can_import_mlx_array(array, *, mode: str = "zero_copy") -> MlxImportSupport:
 
     if mode == "zero_copy":
         reason = _ZERO_COPY_UNSUPPORTED_REASON
+        diagnostic = _mlx_zero_copy_diagnostic()
+        status = "unsupported_public_api"
         if not mlx_available():
             reason = "MLX is not installed; zero-copy MLX import cannot be evaluated."
+            diagnostic = _mlx_absent_diagnostic()
+            status = "skipped_environment"
         return MlxImportSupport(
             supported=False,
             mode=mode,
             shared_storage=False,
             reason=reason,
+            status=status,
+            diagnostic=diagnostic,
         )
 
     if mode == "copy":
@@ -613,12 +852,16 @@ def can_import_mlx_array(array, *, mode: str = "zero_copy") -> MlxImportSupport:
                 mode=mode,
                 shared_storage=False,
                 reason=str(exc),
+                status="reject",
+                diagnostic=getattr(exc, "diagnostic", None),
             )
         return MlxImportSupport(
             supported=True,
             mode=mode,
             shared_storage=False,
             reason="explicit copy import is available through the Python buffer protocol",
+            status="explicit_copy",
+            diagnostic=_explicit_copy_diagnostic(),
         )
 
     raise ValueError("mode must be 'zero_copy' or 'copy'")
@@ -633,9 +876,11 @@ def import_mlx_array(array, *, mode: str = "zero_copy", device: Device | None = 
     """
 
     if mode == "zero_copy":
+        diagnostic = _mlx_zero_copy_diagnostic()
         raise UnsupportedWorkflowError(
             MG_STATUS_UNSUPPORTED,
             message=_ZERO_COPY_UNSUPPORTED_REASON,
+            diagnostic=diagnostic,
         )
 
     if mode != "copy":
@@ -654,6 +899,7 @@ def import_mlx_array(array, *, mode: str = "zero_copy", device: Device | None = 
     buffer._source_owner = array
     buffer._import_mode = "copy"
     buffer._shared_storage = False
+    buffer._diagnostic = _explicit_copy_diagnostic()
     return buffer
 
 
@@ -671,6 +917,8 @@ def mlx_zero_copy_status() -> MlxImportSupport:
         mode="zero_copy",
         shared_storage=False,
         reason=_ZERO_COPY_UNSUPPORTED_REASON,
+        status="unsupported_public_api",
+        diagnostic=_mlx_zero_copy_diagnostic(),
     )
 
 
@@ -679,6 +927,8 @@ __all__ = [
     "Device",
     "Graph",
     "GraphExec",
+    "GraphExecDiagnostics",
+    "InteropDiagnostic",
     "Launch",
     "MetalGraphError",
     "MlxImportSupport",
@@ -698,5 +948,12 @@ __all__ = [
     "MG_RESOURCE_ACCESS_READ_WRITE",
     "MG_RESOURCE_ACCESS_UNKNOWN",
     "MG_RESOURCE_ACCESS_WRITE",
+    "MG_ICB_FALLBACK_BACKEND_ERROR",
+    "MG_ICB_FALLBACK_DISABLED",
+    "MG_ICB_FALLBACK_INELIGIBLE_NODE",
+    "MG_ICB_FALLBACK_NONE",
+    "MG_ICB_FALLBACK_PATCHABLE_FIELD",
+    "MG_ICB_FALLBACK_UNKNOWN_RESOURCE_ACCESS",
+    "MG_ICB_FALLBACK_UNSUPPORTED",
     "MG_STATUS_UNSUPPORTED",
 ]

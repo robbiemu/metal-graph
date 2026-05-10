@@ -90,6 +90,36 @@ Future real zero-copy support must retain the source MLX array for as long as th
 an imported MLX buffer, read from MLX/Python only after `Launch.synchronize()` or the C
 `mgLaunchSynchronize` equivalent has completed.
 
+## Interop Diagnostics
+
+Phase 9 adds small, stable Python diagnostics for optional interop paths. Diagnostics identify the
+path (`copy`, `unsupported`, `reject`, `skipped`, `fallback`, `selected`, `disabled`,
+`unavailable`, or `not_applicable`), source (`mlx`, `python`, `icb`, or `metal_graph`), reason,
+zero-copy status, and synchronization guidance.
+
+Current MLX status remains:
+
+```python
+status = mg.mlx_zero_copy_status()
+assert status.status == "unsupported_public_api"
+assert status.diagnostic.path == "unsupported"
+assert not status.diagnostic.is_zero_copy
+```
+
+Explicit copy mode reports independent Metal Graph storage:
+
+```python
+support = mg.can_import_mlx_array(array, mode="copy")
+assert support.status == "explicit_copy"
+assert support.diagnostic.path == "copy"
+assert not support.diagnostic.is_zero_copy
+```
+
+Existing graph-exec ICB diagnostics are exposed through `GraphExec.diagnostics()`. This wraps the
+existing C ABI diagnostics only; Phase 9 does not add new backend instrumentation. MPSGraph fallback
+details remain limited to existing structured errors and ICB fallback fields when an MPSGraph node
+makes ICB ineligible.
+
 ## Examples
 
 Source-checkout examples live under `examples/python/`:
@@ -97,6 +127,7 @@ Source-checkout examples live under `examples/python/`:
 ```sh
 python examples/python/basic_replay.py
 python examples/python/explicit_copy_buffer.py
+python examples/python/interop_diagnostics.py
 python examples/python/mlx_unsupported_status.py
 ```
 

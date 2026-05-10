@@ -307,3 +307,21 @@ synchronization, implicit copies, or new C runtime semantics.
 
 Phase 8 does not add production wheel distribution, PyPI release automation, MLX graph capture,
 new C ABI features, or Phase 9 interop diagnostics beyond small adapter error-message improvements.
+
+## Phase 9 Direction
+
+Phase 9 adds adapter-level interop diagnostics without changing execution semantics. Diagnostics
+distinguish zero-copy, explicit copy, rejection, unsupported paths, skipped optional dependencies,
+and optional backend fallback reporting where existing APIs already expose it.
+
+The Python adapter exposes a small diagnostic record with path, source, reason, zero-copy status,
+optional-feature status, synchronization guidance, and resource-retention notes. MLX zero-copy
+remains `unsupported_public_api`; `mode="zero_copy"` rejects clearly, and `mode="copy"` remains an
+explicit independent-buffer copy that reports `is_zero_copy == false`.
+
+Phase 9 wraps existing `mgGraphExecGetDiagnostics` for Python ICB observability. It does not add new
+backend behavior, hidden synchronization, MPSGraph diagnostic ABI, true MLX zero-copy, multi-queue
+scheduling, or new C ABI semantics.
+
+MPSGraph diagnostics remain limited to existing structured errors and ICB fallback diagnostics when
+MPSGraph participation affects ICB eligibility.

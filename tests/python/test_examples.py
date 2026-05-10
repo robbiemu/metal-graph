@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[2]
 EXAMPLES = (
     ROOT / "examples" / "python" / "basic_replay.py",
     ROOT / "examples" / "python" / "explicit_copy_buffer.py",
+    ROOT / "examples" / "python" / "interop_diagnostics.py",
     ROOT / "examples" / "python" / "mlx_unsupported_status.py",
 )
 
