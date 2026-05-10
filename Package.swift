@@ -4,6 +4,9 @@ import PackageDescription
 
 let package = Package(
     name: "MetalGraph",
+    platforms: [
+        .macOS(.v14),
+    ],
     products: [
         .library(
             name: "MetalGraph",
@@ -23,10 +26,16 @@ let package = Package(
                 "bindings",
                 "build",
                 "docs",
+                "src/shaders",
+                "src/metal/unsupported_backend.c",
                 "tests",
             ],
             sources: ["src"],
-            publicHeadersPath: "include"
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Foundation", .when(platforms: [.macOS])),
+                .linkedFramework("Metal", .when(platforms: [.macOS])),
+            ]
         ),
         .testTarget(
             name: "MetalGraphSwiftSmokeTests",

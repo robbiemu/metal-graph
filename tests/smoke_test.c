@@ -2,11 +2,9 @@
 
 #include <string.h>
 
-int main(void)
-{
+int main(void) {
     mg_version_t version = mg_version();
-    if (version.major != MG_VERSION_MAJOR ||
-        version.minor != MG_VERSION_MINOR ||
+    if (version.major != MG_VERSION_MAJOR || version.minor != MG_VERSION_MINOR ||
         version.patch != MG_VERSION_PATCH) {
         return 1;
     }

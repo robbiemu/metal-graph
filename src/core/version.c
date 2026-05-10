@@ -1,7 +1,6 @@
 #include "metal_graph/metal_graph.h"
 
-mg_version_t mg_version(void)
-{
+mg_version_t mg_version(void) {
     mg_version_t version = {
         MG_VERSION_MAJOR,
         MG_VERSION_MINOR,
@@ -10,13 +9,9 @@ mg_version_t mg_version(void)
     return version;
 }
 
-const char *mg_version_string(void)
-{
-    return "0.1.0";
-}
+const char *mg_version_string(void) { return "0.1.0"; }
 
-const char *mg_status_string(mg_status_t status)
-{
+const char *mg_status_string(mg_status_t status) {
     switch (status) {
     case MG_STATUS_OK:
         return "ok";
