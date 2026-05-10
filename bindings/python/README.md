@@ -1,15 +1,63 @@
 # Python Adapter
 
-Phase 6 adds a thin Python adapter over the public C ABI. Metal Graph remains the runtime; Python is
-only a client layer.
+The Python adapter is a thin `ctypes` layer over the public C ABI. Metal Graph remains the runtime;
+Python is only a client layer.
 
-The adapter currently uses `ctypes` and a CMake-built shared library target named
-`metal_graph_shared`. It supports a minimal library-owned shared-buffer workflow:
+The adapter uses a CMake-built shared library target named `metal_graph_shared`. It supports a
+minimal library-owned shared-buffer workflow:
 
 - create a device and stream;
 - create shared buffers;
 - build a dispatch graph from a metallib/kernel name;
 - instantiate, launch, synchronize, and read shared-buffer results.
+
+## Local Source Checkout
+
+Build the shared library before running adapter workflows:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+uv run pytest tests/python
+```
+
+From a source checkout, the project `pyproject.toml` configures pytest to add `bindings/python` to
+`PYTHONPATH`. For ad hoc scripts, either run one of the examples under `examples/python/`, or set:
+
+```sh
+PYTHONPATH="$PWD/bindings/python" python examples/python/mlx_unsupported_status.py
+```
+
+## Shared Library Discovery
+
+The adapter searches for the shared library in this order:
+
+1. `METAL_GRAPH_LIBRARY`, if set.
+2. Source-checkout build outputs such as `build/libmetal_graph_shared.dylib`.
+3. Package-adjacent library paths.
+4. System dynamic-loader names as a final fallback.
+
+The explicit override is:
+
+```sh
+METAL_GRAPH_LIBRARY="$PWD/build/libmetal_graph_shared.dylib" uv run pytest tests/python
+```
+
+If discovery fails, the exception lists searched paths and these remediation commands:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+```
+
+You can inspect the current search order from Python:
+
+```python
+import metal_graph as mg
+
+for path in mg.library_search_paths():
+    print(path)
+```
 
 MLX array zero-copy import is still rejected unless the adapter can prove shared storage through a
 stable public MLX API. Current MLX Python APIs expose metadata and buffer/DLPack conversion, but not
@@ -42,12 +90,21 @@ Future real zero-copy support must retain the source MLX array for as long as th
 an imported MLX buffer, read from MLX/Python only after `Launch.synchronize()` or the C
 `mgLaunchSynchronize` equivalent has completed.
 
-Build and test:
+## Examples
+
+Source-checkout examples live under `examples/python/`:
 
 ```sh
-make configure
-make build
-uv run pytest
+python examples/python/basic_replay.py
+python examples/python/explicit_copy_buffer.py
+python examples/python/mlx_unsupported_status.py
 ```
 
-If the shared library is not in `build/`, set `METAL_GRAPH_LIBRARY` to the dynamic library path.
+The examples are intentionally small. They do not add a Python graph-builder DSL, hide
+synchronization, or change C runtime ownership rules.
+
+## Out Of Scope
+
+The adapter does not provide production wheel release automation, PyPI publishing, MLX graph
+capture, a tensor compiler frontend, hidden synchronization, implicit large-buffer copies, or a
+Python-first replacement for the C API.

@@ -107,23 +107,86 @@ class _DispatchDesc(ctypes.Structure):
 
 
 _LIB: ctypes.CDLL | None = None
+_LIBRARY_ENV_VAR = "METAL_GRAPH_LIBRARY"
+_LIBRARY_NAMES = (
+    "libmetal_graph_shared.dylib",
+    "libmetal_graph_shared.so",
+    "metal_graph_shared.dll",
+    "libmetal_graph.dylib",
+    "libmetal_graph.so",
+)
 
 
-def _candidate_libraries() -> list[Path]:
-    env_path = os.environ.get("METAL_GRAPH_LIBRARY")
+@dataclass(frozen=True)
+class _LibraryCandidate:
+    load_value: str
+    display: str
+    source: str
+    requires_existing_path: bool = True
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _candidate_libraries() -> list[_LibraryCandidate]:
+    env_path = os.environ.get(_LIBRARY_ENV_VAR)
     if env_path:
-        return [Path(env_path)]
+        return [
+            _LibraryCandidate(
+                load_value=env_path,
+                display=f"{env_path} ({_LIBRARY_ENV_VAR})",
+                source=_LIBRARY_ENV_VAR,
+            )
+        ]
 
-    root = Path(__file__).resolve().parents[3]
-    names = (
-        "libmetal_graph_shared.dylib",
-        "libmetal_graph_shared.so",
-        "metal_graph_shared.dll",
-        "libmetal_graph.dylib",
-        "libmetal_graph.so",
+    root = _repo_root()
+    package_dir = Path(__file__).resolve().parent
+    dirs = (
+        root / "build",
+        root / "build" / "Debug",
+        root / "build" / "Release",
+        package_dir,
+        package_dir / ".libs",
     )
-    dirs = (root / "build", root / "build" / "Debug", root / "build" / "Release")
-    return [directory / name for directory in dirs for name in names]
+    candidates = [
+        _LibraryCandidate(str(directory / name), str(directory / name), "source checkout")
+        for directory in dirs
+        for name in _LIBRARY_NAMES
+    ]
+    candidates.extend(
+        _LibraryCandidate(
+            load_value=name,
+            display=f"{name} (system dynamic loader)",
+            source="system dynamic loader",
+            requires_existing_path=False,
+        )
+        for name in _LIBRARY_NAMES
+    )
+    return candidates
+
+
+def library_search_paths() -> list[str]:
+    """Return the shared-library locations the adapter will try in order."""
+
+    return [candidate.display for candidate in _candidate_libraries()]
+
+
+def _library_load_error_message(
+    candidates: Sequence[_LibraryCandidate], errors: Sequence[str]
+) -> str:
+    searched = "\n  ".join(candidate.display for candidate in candidates)
+    details = "\nload errors:\n  " + "\n  ".join(errors) if errors else ""
+    return (
+        "could not load Metal Graph shared library.\n"
+        "searched paths:\n"
+        f"  {searched}\n"
+        "how to fix:\n"
+        "  cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug\n"
+        "  cmake --build build\n"
+        f"  or set {_LIBRARY_ENV_VAR}=/path/to/libmetal_graph_shared.dylib"
+        f"{details}"
+    )
 
 
 def _load_library() -> ctypes.CDLL:
@@ -131,24 +194,24 @@ def _load_library() -> ctypes.CDLL:
     if _LIB is not None:
         return _LIB
 
+    candidates = _candidate_libraries()
     errors: list[str] = []
-    for path in _candidate_libraries():
-        if not path.exists():
+    for candidate in candidates:
+        if candidate.requires_existing_path and not Path(candidate.load_value).exists():
+            errors.append(f"{candidate.display}: file does not exist")
             continue
         try:
-            lib = ctypes.CDLL(str(path))
+            lib = ctypes.CDLL(candidate.load_value)
         except OSError as exc:
-            errors.append(f"{path}: {exc}")
+            errors.append(f"{candidate.display}: {exc}")
             continue
         _configure_library(lib)
         _LIB = lib
         return lib
 
-    searched = ", ".join(str(path) for path in _candidate_libraries())
-    extra = f" Load errors: {'; '.join(errors)}" if errors else ""
     raise MetalGraphError(
         MG_STATUS_UNSUPPORTED,
-        message=f"Metal Graph shared library not found. Searched: {searched}.{extra}",
+        message=_library_load_error_message(candidates, errors),
     )
 
 
@@ -625,6 +688,7 @@ __all__ = [
     "can_import_mlx_array",
     "from_mlx_array",
     "import_mlx_array",
+    "library_search_paths",
     "mlx_available",
     "mlx_zero_copy_status",
     "status_string",
