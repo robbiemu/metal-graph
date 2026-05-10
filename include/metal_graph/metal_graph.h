@@ -98,7 +98,8 @@ typedef enum mg_resource_access {
  * while resource contracts describe the shader-visible range and access pattern. byte_offset is
  * relative to the binding offset. byte_count may be zero only for unknown range metadata; patchable
  * dispatch buffer bindings require a nonzero byte_count for range-complete validation. alignment
- * is optional and defaults to 1 when zero.
+ * is optional and defaults to 1 when zero. Dispatch buffer binding indices must be unique within a
+ * dispatch node, and each resource contract must refer to exactly one existing binding index.
  */
 typedef struct mg_dispatch_resource_desc {
     size_t size;
@@ -169,6 +170,7 @@ typedef struct mg_dispatch_desc {
     /*
      * Phase 4 resource contracts are copied by value. They are keyed by buffer binding index and
      * drive range-complete dispatch buffer patch validation and conservative ICB eligibility.
+     * Duplicate buffer binding indices and duplicate resource contracts are rejected.
      */
     const mg_dispatch_resource_desc_t *resources;
     uint32_t resource_count;

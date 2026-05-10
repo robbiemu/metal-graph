@@ -40,6 +40,14 @@ The public descriptor additions are:
 Dispatch resource requirements are keyed by buffer binding index. They are copied during graph
 construction and cloned into `mg_graph_exec_t` during instantiation.
 
+Dispatch buffer binding indices are unique within a dispatch node. Because dispatch resource
+contracts are keyed by binding index, allowing duplicate bindings would make the resource contract
+ambiguous and could cause patch validation and backend encoding to reason about different effective
+bindings. `mgGraphAddDispatchNode` rejects duplicate binding indices.
+
+A dispatch resource descriptor must refer to exactly one existing binding index. Duplicate dispatch
+resource descriptors for the same binding index are invalid.
+
 Patchable dispatch buffer bindings require a declared nonzero resource range. Dispatch buffer
 patches now validate:
 
@@ -58,6 +66,11 @@ forces conservative ICB fallback.
 
 Phase 4 adds a narrow internal ICB path for eligible static single-dispatch graph execs.
 
+Earlier design language about dispatch-only groups is reserved for a future extension.
+Multi-dispatch execs fall back to direct encoding until dependency-aware grouping and
+resource-hazard analysis can prove that indirect command execution preserves direct-encoding
+semantics.
+
 ICB is used only when:
 
 - ICB is available on the backend;
@@ -68,9 +81,6 @@ ICB is used only when:
 - the dispatch has no patchable fields;
 - no copy, fill, event, barrier, workspace, MPSGraph, host callback, or other unsupported node
   interrupts the group.
-
-Multi-dispatch ICB groups are deferred until dependency-aware hazard analysis can prove that
-concurrent indirect dispatch execution preserves direct-encoding semantics.
 
 If any requirement is not met, the exec uses direct encoding. A `GraphExec` remains a reusable
 host-side execution plan, not a reused `MTLCommandBuffer`; launches still create fresh command
@@ -103,3 +113,7 @@ ICB, how many fell back, and the last fallback reason.
 - Rust bindings.
 - Multi-queue execution.
 - Device-side graph launch.
+- Dependency-aware ICB grouping.
+- Resource-hazard-aware multi-dispatch ICB eligibility.
+- Per-group diagnostics instead of last/global fallback reason.
+- Broader dispatch resource contracts for hazard analysis.

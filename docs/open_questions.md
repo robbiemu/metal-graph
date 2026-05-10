@@ -108,6 +108,14 @@ Phase 4 adds separate dispatch resource requirement metadata keyed by binding in
 describes the declared shader-visible range, access mode, and compatibility constraints needed for
 validation, hazard reasoning, memory planning, and future backend optimizations.
 
+Dispatch buffer binding indices are unique within a dispatch node. Because dispatch resource
+contracts are keyed by binding index, allowing duplicate bindings would make the resource contract
+ambiguous and could cause patch validation and backend encoding to reason about different effective
+bindings. `mgGraphAddDispatchNode` rejects duplicate binding indices.
+
+A dispatch resource descriptor must refer to exactly one existing binding index. Duplicate dispatch
+resource descriptors for the same binding index are invalid.
+
 This decision keeps Phase 3 valid while acknowledging a deliberate limitation: Phase 3 dispatch
 buffer patch compatibility was not range-complete. Phase 4 resolves that limitation for dispatch
 nodes that declare resource requirements.
@@ -119,3 +127,21 @@ Decision:
 - Dispatch buffer patch validation uses those requirements to prove replacement-buffer range
   compatibility.
 - If a dispatch buffer binding is patchable, it must have a declared nonzero resource range.
+
+### Phase 4 ICB Scope
+
+The first ICB implementation is intentionally narrower than general "dispatch-only graph"
+eligibility. A dispatch-only graph can still contain dependencies and resource hazards between
+dispatches. Without dependency-aware ICB grouping and explicit hazard handling, treating multiple
+dispatches as one ICB-eligible group is too broad.
+
+Phase 4 therefore supports only one static dispatch node in the ICB path. Multi-dispatch execs fall
+back to direct encoding until the planner can prove that indirect command execution preserves
+direct-encoding semantics.
+
+Future work:
+
+- dependency-aware ICB grouping;
+- resource-hazard-aware multi-dispatch ICB eligibility;
+- per-group diagnostics instead of last/global fallback reason;
+- broader dispatch resource contracts for hazard analysis.

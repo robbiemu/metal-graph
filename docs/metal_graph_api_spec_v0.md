@@ -148,10 +148,17 @@ Phase 4 adds dispatch resource contracts and optional ICB diagnostics:
 resource requirements are separate metadata that describe shader-visible byte ranges, access modes,
 and alignment constraints.
 
+Dispatch buffer binding indices are unique within one dispatch node. Because dispatch resource
+contracts are keyed by binding index, duplicate bindings would make resource contracts, patch
+validation, and backend encoding ambiguous. `mgGraphAddDispatchNode` rejects duplicate dispatch
+buffer binding indices.
+
 ## Phase 4 Semantics
 
 - Dispatch resource contracts are copied into graph nodes and cloned into graph execs during
   instantiation.
+- A dispatch resource descriptor must refer to exactly one existing dispatch buffer binding index.
+  Duplicate dispatch resource descriptors for the same binding index are invalid.
 - Non-patchable dispatch bindings may omit resource requirements, but unknown or missing
   requirements force conservative backend behavior.
 - Patchable dispatch buffer bindings require a declared nonzero resource range.
@@ -161,10 +168,11 @@ and alignment constraints.
 - Unknown access is valid metadata, but it is conservative and makes ICB eligibility fail.
 - ICB is optional. If ICB is disabled, unsupported, or unsafe, the exec remains valid and launches
   through direct encoding.
-- ICB eligibility is conservative: Phase 4 supports only static single-dispatch execs with known
-  resource ranges, known access modes, no scalar bindings, and no patchable dispatch fields.
-  Multi-dispatch ICB groups are deferred until dependency-aware hazard analysis can prove they
-  preserve direct-encoding semantics.
+- ICB eligibility is conservative: Phase 4 intentionally limits ICB use to execs containing one
+  eligible static dispatch node with known resource ranges, known access modes, no scalar bindings,
+  and no patchable dispatch fields. Earlier design language about dispatch-only groups is reserved
+  for a future extension. Multi-dispatch ICB groups are deferred until dependency-aware grouping and
+  resource-hazard analysis can prove they preserve direct-encoding semantics.
 - Public behavior must be identical with ICB enabled or disabled. Launches still create fresh Metal
   command buffers.
 - Phase 4 does not expose `MTLIndirectCommandBuffer`, MPSGraph, MLX, Python, Swift wrappers, Rust,
@@ -184,3 +192,6 @@ Public ownership is create/destroy. Graph execs must retain/copy the buffers, ev
 Later phases may add broader patch overlays, fuller hazard analysis, MPSGraph nodes, Python/MLX
 adapters, Swift convenience wrappers, and Rust bindings. Future phases must preserve the Phase 0-4
 naming convention and behavior unless an explicit API version change says otherwise.
+
+Future ICB work includes dependency-aware grouping, resource-hazard-aware multi-dispatch
+eligibility, per-group diagnostics, and broader dispatch resource contracts for hazard analysis.
