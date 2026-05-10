@@ -9,6 +9,8 @@ project(
 
 include(CTest)
 
+option(MG_ENABLE_MPSGRAPH "Enable optional MPSGraph node backend on Apple platforms" ON)
+
 set(MG_BACKEND_SOURCE src/metal/unsupported_backend.c)
 if(APPLE)
   enable_language(OBJCXX)
@@ -40,11 +42,27 @@ target_include_directories(metal_graph
 if(APPLE)
   find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
   find_library(METAL_FRAMEWORK Metal REQUIRED)
+  find_library(METAL_PERFORMANCE_SHADERS_FRAMEWORK MetalPerformanceShaders)
+  find_library(METAL_PERFORMANCE_SHADERS_GRAPH_FRAMEWORK MetalPerformanceShadersGraph)
   target_link_libraries(metal_graph
     PUBLIC
       ${FOUNDATION_FRAMEWORK}
       ${METAL_FRAMEWORK}
   )
+  if(MG_ENABLE_MPSGRAPH AND METAL_PERFORMANCE_SHADERS_FRAMEWORK AND METAL_PERFORMANCE_SHADERS_GRAPH_FRAMEWORK)
+    target_compile_definitions(metal_graph PRIVATE MG_ENABLE_MPSGRAPH=1)
+    target_link_libraries(metal_graph
+      PUBLIC
+        ${METAL_PERFORMANCE_SHADERS_FRAMEWORK}
+        ${METAL_PERFORMANCE_SHADERS_GRAPH_FRAMEWORK}
+    )
+    set(MG_HAS_MPSGRAPH TRUE)
+  else()
+    target_compile_definitions(metal_graph PRIVATE MG_ENABLE_MPSGRAPH=0)
+    set(MG_HAS_MPSGRAPH FALSE)
+  endif()
+else()
+  target_compile_definitions(metal_graph PRIVATE MG_ENABLE_MPSGRAPH=0)
 endif()
 
 set_target_properties(metal_graph PROPERTIES
@@ -115,6 +133,19 @@ if(BUILD_TESTING)
       )
       target_link_libraries(metal_graph_metal_dispatch_test PRIVATE MetalGraph::metal_graph)
       add_test(NAME metal_graph_metal_dispatch_test COMMAND metal_graph_metal_dispatch_test)
+
+      if(MG_HAS_MPSGRAPH)
+        add_executable(metal_graph_mpsgraph_node_test
+          tests/gpu/mpsgraph_node_test.mm
+        )
+        add_dependencies(metal_graph_mpsgraph_node_test metal_graph_test_metallib)
+        target_compile_options(metal_graph_mpsgraph_node_test PRIVATE -fobjc-arc)
+        target_compile_definitions(metal_graph_mpsgraph_node_test PRIVATE
+          TEST_METALLIB_PATH="${MG_TEST_METALLIB}"
+        )
+        target_link_libraries(metal_graph_mpsgraph_node_test PRIVATE MetalGraph::metal_graph)
+        add_test(NAME metal_graph_mpsgraph_node_test COMMAND metal_graph_mpsgraph_node_test)
+      endif()
     else()
       message(WARNING "Metal Toolchain is unavailable; skipping Metal GPU integration test target")
     endif()

@@ -69,7 +69,8 @@ typedef enum mg_node_kind {
     MG_NODE_FILL = 3,
     MG_NODE_EVENT_WAIT = 4,
     MG_NODE_EVENT_SIGNAL = 5,
-    MG_NODE_BARRIER = 6
+    MG_NODE_BARRIER = 6,
+    MG_NODE_MPSGRAPH = 7
 } mg_node_kind_t;
 
 typedef struct mg_version {
@@ -203,6 +204,49 @@ typedef struct mg_fill_desc {
     uint8_t value;
 } mg_fill_desc_t;
 
+typedef enum mg_tensor_data_type { MG_TENSOR_DATA_TYPE_FLOAT32 = 1 } mg_tensor_data_type_t;
+
+typedef enum mg_tensor_layout { MG_TENSOR_LAYOUT_CONTIGUOUS = 1 } mg_tensor_layout_t;
+
+/*
+ * Tensor buffer mapping for an optional MPSGraph node.
+ *
+ * Phase 5 supports fixed-shape contiguous float32 tensors backed by mg_buffer_t. shape is borrowed
+ * for the duration of the API call and copied into graph/exec state. byte_offset must be zero in
+ * Phase 5 because the private MPSGraph bridge binds whole MTLBuffer objects. byte_count may be zero
+ * to request the exact shape-derived byte size; otherwise it must be at least that size and fit
+ * inside buffer. The caller owns the buffer handle; graph construction and GraphExec retain the
+ * buffer resources required for relaunch.
+ */
+typedef struct mg_mpsgraph_tensor_desc {
+    size_t size;
+    mg_buffer_t *buffer;
+    size_t byte_offset;
+    size_t byte_count;
+    mg_tensor_data_type_t data_type;
+    mg_tensor_layout_t layout;
+    uint32_t rank;
+    const size_t *shape;
+} mg_mpsgraph_tensor_desc_t;
+
+/*
+ * Optional MPSGraph tensor-subgraph island descriptor.
+ *
+ * package_path points to an MPSGraphExecutable package created outside the core runtime. The path
+ * string and tensor metadata are copied during graph construction. Native MPSGraph objects are not
+ * exposed by the core C ABI. Feed and target arrays are ordered to match the executable's feed and
+ * target tensor order. MPSGraph nodes are graph-owned, frozen at instantiation, not patchable in
+ * Phase 5, and force direct encoding/ICB fallback.
+ */
+typedef struct mg_mpsgraph_desc {
+    size_t size;
+    const char *package_path;
+    const mg_mpsgraph_tensor_desc_t *feeds;
+    uint32_t feed_count;
+    const mg_mpsgraph_tensor_desc_t *targets;
+    uint32_t target_count;
+} mg_mpsgraph_desc_t;
+
 /*
  * Phase 2 transient arena descriptor.
  *
@@ -319,6 +363,14 @@ MG_API mg_status_t mgGraphAddEventSignalNode(mg_graph_t *graph, mg_event_t *even
  */
 MG_API mg_status_t mgGraphAddBarrierNode(mg_graph_t *graph, mg_node_t **out_node,
                                          mg_error_t **out_error);
+/*
+ * Adds a graph-owned optional MPSGraph tensor-subgraph island. The core public C ABI accepts an
+ * MPSGraph executable package path and fixed tensor buffer metadata only; it does not expose native
+ * MPSGraph or Objective-C types. If the backend is compiled without MPSGraph support or MPSGraph is
+ * unavailable, instantiation fails with MG_STATUS_UNSUPPORTED.
+ */
+MG_API mg_status_t mgGraphAddMPSGraphNode(mg_graph_t *graph, const mg_mpsgraph_desc_t *desc,
+                                          mg_node_t **out_node, mg_error_t **out_error);
 MG_API mg_node_id_t mgNodeId(const mg_node_t *node);
 MG_API mg_status_t mgGraphAddDependency(mg_graph_t *graph, mg_node_t *before, mg_node_t *after,
                                         mg_error_t **out_error);

@@ -14,3 +14,9 @@ kernel void mg_phase3_add_scalar(device uint *values [[buffer(0)]],
 {
     values[gid] += delta;
 }
+
+kernel void mg_phase5_add_one_float(device float *values [[buffer(0)]],
+                                    uint gid [[thread_position_in_grid]])
+{
+    values[gid] += 1.0f;
+}

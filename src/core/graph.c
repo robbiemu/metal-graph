@@ -106,6 +106,138 @@ static bool mg_resource_access_valid(mg_resource_access_t access) {
            access == MG_RESOURCE_ACCESS_WRITE || access == MG_RESOURCE_ACCESS_READ_WRITE;
 }
 
+static size_t mg_tensor_data_type_size(mg_tensor_data_type_t data_type) {
+    switch (data_type) {
+    case MG_TENSOR_DATA_TYPE_FLOAT32:
+        return sizeof(float);
+    default:
+        return 0;
+    }
+}
+
+static bool mg_tensor_layout_valid(mg_tensor_layout_t layout) {
+    return layout == MG_TENSOR_LAYOUT_CONTIGUOUS;
+}
+
+static bool mg_shape_byte_count(uint32_t rank, const size_t *shape, size_t element_size,
+                                size_t *out_byte_count) {
+    if (!out_byte_count || rank == 0 || !shape || element_size == 0) {
+        return false;
+    }
+
+    size_t elements = 1;
+    for (uint32_t i = 0; i < rank; ++i) {
+        if (shape[i] == 0 || elements > SIZE_MAX / shape[i]) {
+            return false;
+        }
+        elements *= shape[i];
+    }
+    if (elements > SIZE_MAX / element_size) {
+        return false;
+    }
+    *out_byte_count = elements * element_size;
+    return true;
+}
+
+static mg_status_t mg_validate_mpsgraph_tensor_desc(const mg_mpsgraph_tensor_desc_t *tensor,
+                                                    mg_error_t **out_error) {
+    if (!tensor || tensor->size < sizeof(*tensor) || !tensor->buffer || !tensor->shape ||
+        tensor->rank == 0 || !mg_tensor_layout_valid(tensor->layout)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "MPSGraph tensor descriptor is invalid", NULL);
+    }
+
+    size_t required_bytes = 0;
+    size_t element_size = mg_tensor_data_type_size(tensor->data_type);
+    if (!mg_shape_byte_count(tensor->rank, tensor->shape, element_size, &required_bytes)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "MPSGraph tensor shape or dtype is invalid", NULL);
+    }
+
+    size_t byte_count = tensor->byte_count ? tensor->byte_count : required_bytes;
+    if (byte_count < required_bytes || tensor->byte_offset != 0 ||
+        !mg_range_valid(tensor->buffer->length, tensor->byte_offset, byte_count)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "MPSGraph tensor buffer range is invalid", NULL);
+    }
+
+    return MG_STATUS_OK;
+}
+
+static mg_status_t mg_mpsgraph_tensor_clone(const mg_mpsgraph_tensor_desc_t *src,
+                                            mg_mpsgraph_tensor_t *dst, mg_error_t **out_error) {
+    memset(dst, 0, sizeof(*dst));
+
+    size_t element_size = mg_tensor_data_type_size(src->data_type);
+    size_t required_bytes = 0;
+    if (!mg_shape_byte_count(src->rank, src->shape, element_size, &required_bytes)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "MPSGraph tensor shape or dtype is invalid", NULL);
+    }
+
+    dst->shape = (size_t *)malloc(sizeof(*dst->shape) * src->rank);
+    if (!dst->shape) {
+        return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
+    }
+
+    memcpy(dst->shape, src->shape, sizeof(*dst->shape) * src->rank);
+    dst->buffer = src->buffer;
+    dst->byte_offset = src->byte_offset;
+    dst->byte_count = src->byte_count ? src->byte_count : required_bytes;
+    dst->data_type = src->data_type;
+    dst->layout = src->layout;
+    dst->rank = src->rank;
+    mg_buffer_retain(dst->buffer);
+    return MG_STATUS_OK;
+}
+
+static void mg_mpsgraph_tensor_clear(mg_mpsgraph_tensor_t *tensor) {
+    if (!tensor) {
+        return;
+    }
+    mg_buffer_release(tensor->buffer);
+    free(tensor->shape);
+    memset(tensor, 0, sizeof(*tensor));
+}
+
+static mg_status_t mg_mpsgraph_tensor_array_clone(const mg_mpsgraph_tensor_desc_t *src,
+                                                  uint32_t count,
+                                                  mg_mpsgraph_tensor_t **out_tensors,
+                                                  uint32_t *out_count, mg_error_t **out_error) {
+    *out_tensors = NULL;
+    *out_count = 0;
+    if (count == 0) {
+        return MG_STATUS_OK;
+    }
+
+    mg_mpsgraph_tensor_t *tensors = (mg_mpsgraph_tensor_t *)calloc(count, sizeof(*tensors));
+    if (!tensors) {
+        return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
+    }
+
+    for (uint32_t i = 0; i < count; ++i) {
+        mg_status_t status = mg_mpsgraph_tensor_clone(&src[i], &tensors[i], out_error);
+        if (status != MG_STATUS_OK) {
+            for (uint32_t j = 0; j < i; ++j) {
+                mg_mpsgraph_tensor_clear(&tensors[j]);
+            }
+            free(tensors);
+            return status;
+        }
+    }
+
+    *out_tensors = tensors;
+    *out_count = count;
+    return MG_STATUS_OK;
+}
+
+static void mg_mpsgraph_tensor_array_clear(mg_mpsgraph_tensor_t *tensors, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        mg_mpsgraph_tensor_clear(&tensors[i]);
+    }
+    free(tensors);
+}
+
 static mg_status_t mg_validate_dispatch_resource_desc(const mg_dispatch_resource_desc_t *resource,
                                                       const mg_buffer_binding_t *bindings,
                                                       uint32_t binding_count,
@@ -240,6 +372,17 @@ void mg_dispatch_node_clear(mg_dispatch_node_t *dispatch) {
     memset(dispatch, 0, sizeof(*dispatch));
 }
 
+void mg_mpsgraph_node_clear(mg_mpsgraph_node_t *mpsgraph) {
+    if (!mpsgraph) {
+        return;
+    }
+
+    free(mpsgraph->package_path);
+    mg_mpsgraph_tensor_array_clear(mpsgraph->feeds, mpsgraph->feed_count);
+    mg_mpsgraph_tensor_array_clear(mpsgraph->targets, mpsgraph->target_count);
+    memset(mpsgraph, 0, sizeof(*mpsgraph));
+}
+
 void mg_node_clear(mg_node_t *node) {
     if (!node) {
         return;
@@ -262,6 +405,9 @@ void mg_node_clear(mg_node_t *node) {
     case MG_NODE_EVENT_SIGNAL:
         mg_event_release(node->as.event.event);
         memset(&node->as.event, 0, sizeof(node->as.event));
+        break;
+    case MG_NODE_MPSGRAPH:
+        mg_mpsgraph_node_clear(&node->as.mpsgraph);
         break;
     case MG_NODE_BARRIER:
         break;
@@ -637,6 +783,69 @@ mg_status_t mgGraphAddBarrierNode(mg_graph_t *graph, mg_node_t **out_node, mg_er
     mg_node_t *node = NULL;
     mg_status_t status = mg_graph_alloc_node(graph, MG_NODE_BARRIER, &node, out_error);
     if (status != MG_STATUS_OK) {
+        return status;
+    }
+
+    mg_graph_commit_node(graph, node, out_node);
+    return MG_STATUS_OK;
+}
+
+mg_status_t mgGraphAddMPSGraphNode(mg_graph_t *graph, const mg_mpsgraph_desc_t *desc,
+                                   mg_node_t **out_node, mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (out_node) {
+        *out_node = NULL;
+    }
+
+    if (!graph || !desc || !out_node) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "graph, desc, and out_node are required", NULL);
+    }
+    if (desc->size < sizeof(*desc) || !desc->package_path || !desc->feeds ||
+        desc->feed_count == 0 || !desc->targets || desc->target_count == 0) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "MPSGraph descriptor is incomplete", NULL);
+    }
+
+    for (uint32_t i = 0; i < desc->feed_count; ++i) {
+        mg_status_t status = mg_validate_mpsgraph_tensor_desc(&desc->feeds[i], out_error);
+        if (status != MG_STATUS_OK) {
+            return status;
+        }
+    }
+    for (uint32_t i = 0; i < desc->target_count; ++i) {
+        mg_status_t status = mg_validate_mpsgraph_tensor_desc(&desc->targets[i], out_error);
+        if (status != MG_STATUS_OK) {
+            return status;
+        }
+    }
+
+    mg_node_t *node = NULL;
+    mg_status_t status = mg_graph_alloc_node(graph, MG_NODE_MPSGRAPH, &node, out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+
+    node->as.mpsgraph.package_path = mg_strdup(desc->package_path);
+    if (!node->as.mpsgraph.package_path) {
+        mg_node_clear(node);
+        free(node);
+        return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
+    }
+
+    status = mg_mpsgraph_tensor_array_clone(desc->feeds, desc->feed_count, &node->as.mpsgraph.feeds,
+                                            &node->as.mpsgraph.feed_count, out_error);
+    if (status != MG_STATUS_OK) {
+        mg_node_clear(node);
+        free(node);
+        return status;
+    }
+    status = mg_mpsgraph_tensor_array_clone(desc->targets, desc->target_count,
+                                            &node->as.mpsgraph.targets,
+                                            &node->as.mpsgraph.target_count, out_error);
+    if (status != MG_STATUS_OK) {
+        mg_node_clear(node);
+        free(node);
         return status;
     }
 

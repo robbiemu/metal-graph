@@ -111,6 +111,15 @@ int main(void) {
     mgErrorDestroy(error);
     error = NULL;
 
+    if (expect_status(mgGraphAddMPSGraphNode(graph, NULL, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject null MPSGraph descriptor")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 10;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
     if (expect_status(mgGraphAddBarrierNode(NULL, &invalid, &error), MG_STATUS_INVALID_ARGUMENT,
                       "reject null barrier graph")) {
         mgErrorDestroy(error);
@@ -142,6 +151,131 @@ int main(void) {
     }
     mgErrorDestroy(error);
     error = NULL;
+
+    mg_buffer_t mps_buffer = {
+        NULL,
+        NULL,
+        sizeof(float) * 4,
+        1,
+    };
+    size_t mps_shape[1] = {4};
+    mg_mpsgraph_tensor_desc_t mps_tensor;
+    memset(&mps_tensor, 0, sizeof(mps_tensor));
+    mps_tensor.size = sizeof(mps_tensor);
+    mps_tensor.buffer = &mps_buffer;
+    mps_tensor.data_type = MG_TENSOR_DATA_TYPE_FLOAT32;
+    mps_tensor.layout = MG_TENSOR_LAYOUT_CONTIGUOUS;
+    mps_tensor.rank = 1;
+    mps_tensor.shape = mps_shape;
+    mg_mpsgraph_desc_t mps_desc;
+    memset(&mps_desc, 0, sizeof(mps_desc));
+    mps_desc.size = sizeof(mps_desc);
+    mps_desc.package_path = "missing-test-only.mpsgraphpackage";
+    mps_desc.feeds = &mps_tensor;
+    mps_desc.feed_count = 1;
+    mps_desc.targets = &mps_tensor;
+    mps_desc.target_count = 1;
+
+    mg_mpsgraph_desc_t missing_feed_desc = mps_desc;
+    missing_feed_desc.feeds = NULL;
+    if (expect_status(mgGraphAddMPSGraphNode(graph, &missing_feed_desc, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject missing MPSGraph feeds")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 14;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    mg_mpsgraph_tensor_desc_t invalid_mps_tensor = mps_tensor;
+    invalid_mps_tensor.rank = 0;
+    mps_desc.feeds = &invalid_mps_tensor;
+    if (expect_status(mgGraphAddMPSGraphNode(graph, &mps_desc, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject invalid MPSGraph shape")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 14;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    invalid_mps_tensor = mps_tensor;
+    invalid_mps_tensor.data_type = (mg_tensor_data_type_t)999;
+    mps_desc.feeds = &invalid_mps_tensor;
+    if (expect_status(mgGraphAddMPSGraphNode(graph, &mps_desc, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject invalid MPSGraph dtype")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 14;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    invalid_mps_tensor = mps_tensor;
+    invalid_mps_tensor.layout = (mg_tensor_layout_t)999;
+    mps_desc.feeds = &invalid_mps_tensor;
+    if (expect_status(mgGraphAddMPSGraphNode(graph, &mps_desc, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject invalid MPSGraph layout")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 14;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    invalid_mps_tensor = mps_tensor;
+    invalid_mps_tensor.byte_count = sizeof(float) * 2;
+    mps_desc.feeds = &invalid_mps_tensor;
+    if (expect_status(mgGraphAddMPSGraphNode(graph, &mps_desc, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject too-small MPSGraph tensor range")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 14;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    mps_desc.feeds = &mps_tensor;
+    mg_node_t *mps_node = NULL;
+    if (expect_status(mgGraphAddMPSGraphNode(graph, &mps_desc, &mps_node, &error), MG_STATUS_OK,
+                      "add MPSGraph node")) {
+        mgGraphDestroy(graph);
+        return 14;
+    }
+    if (expect_status(mgGraphSetNodePatchFlags(graph, mps_node, MG_PATCH_DISPATCH_GRID, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject MPSGraph patch flags")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 14;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    mg_graph_t *mps_cycle_graph = NULL;
+    mg_node_t *mps_cycle_node = NULL;
+    mg_node_t *mps_cycle_barrier = NULL;
+    if (expect_status(mgGraphCreate(&mps_cycle_graph, &error), MG_STATUS_OK,
+                      "create MPSGraph cycle graph") ||
+        expect_status(mgGraphAddMPSGraphNode(mps_cycle_graph, &mps_desc, &mps_cycle_node, &error),
+                      MG_STATUS_OK, "add MPSGraph cycle node") ||
+        expect_status(mgGraphAddBarrierNode(mps_cycle_graph, &mps_cycle_barrier, &error),
+                      MG_STATUS_OK, "add MPSGraph cycle barrier") ||
+        expect_status(
+            mgGraphAddDependency(mps_cycle_graph, mps_cycle_node, mps_cycle_barrier, &error),
+            MG_STATUS_OK, "add MPSGraph dependency") ||
+        expect_status(
+            mgGraphAddDependency(mps_cycle_graph, mps_cycle_barrier, mps_cycle_node, &error),
+            MG_STATUS_OK, "add MPSGraph cycle dependency") ||
+        expect_status(mgGraphValidate(mps_cycle_graph, &error), MG_STATUS_INVALID_TOPOLOGY,
+                      "MPSGraph node participates in cycle validation")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(mps_cycle_graph);
+        mgGraphDestroy(graph);
+        return 14;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+    mgGraphDestroy(mps_cycle_graph);
 
     mg_workspace_desc_t invalid_workspace;
     memset(&invalid_workspace, 0, sizeof(invalid_workspace));
