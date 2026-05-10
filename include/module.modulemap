@@ -1,0 +1,4 @@
+module MetalGraph {
+  umbrella header "metal_graph/metal_graph.h"
+  export *
+}

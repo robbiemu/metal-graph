@@ -1,0 +1,67 @@
+# Build outputs
+build/
+cmake-build-*/
+out/
+tmp/
+temp/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+CMakeUserPresets.json
+.ninja_deps
+.ninja_log
+
+# Object and library files
+*.o
+*.a
+*.la
+*.lo
+*.dylib
+*.so
+*.dll
+*.exe
+*.dSYM/
+
+# Metal generated artifacts
+*.air
+*.metallib
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Swift and Xcode
+.build/
+.swiftpm/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# Python
+.venv/
+venv/
+env/
+dist/
+htmlcov/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.coverage
+.coverage.*
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Rust
+target/
+
+# Logs
+*.log
