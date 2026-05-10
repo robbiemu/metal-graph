@@ -32,6 +32,7 @@ typedef struct mg_launch mg_launch_t;
 typedef struct mg_node mg_node_t;
 typedef struct mg_buffer mg_buffer_t;
 typedef struct mg_event mg_event_t;
+typedef struct mg_arena mg_arena_t;
 typedef struct mg_error mg_error_t;
 
 typedef uint64_t mg_node_id_t;
@@ -56,7 +57,9 @@ typedef enum mg_error_stage {
     MG_ERROR_STAGE_ENCODE = 4,
     MG_ERROR_STAGE_COMMIT = 5,
     MG_ERROR_STAGE_COMPLETE = 6,
-    MG_ERROR_STAGE_SYNC = 7
+    MG_ERROR_STAGE_SYNC = 7,
+    MG_ERROR_STAGE_PLAN_MEMORY = 8,
+    MG_ERROR_STAGE_BACKEND_ALLOCATE = 9
 } mg_error_stage_t;
 
 typedef enum mg_node_kind {
@@ -65,7 +68,8 @@ typedef enum mg_node_kind {
     MG_NODE_FILL = 3,
     MG_NODE_EVENT_WAIT = 4,
     MG_NODE_EVENT_SIGNAL = 5,
-    MG_NODE_BARRIER = 6
+    MG_NODE_BARRIER = 6,
+    MG_NODE_WORKSPACE = 7
 } mg_node_kind_t;
 
 typedef struct mg_version {
@@ -117,6 +121,37 @@ typedef struct mg_fill_desc {
     uint8_t value;
 } mg_fill_desc_t;
 
+/*
+ * Phase 2 transient arena descriptor.
+ *
+ * Arenas are caller-owned descriptors for graph-exec workspace capacity. They do not expose a
+ * host pointer, Metal object, or stable offset layout. byte_count and alignment must be nonzero;
+ * alignment must be a power of two. The size field is the descriptor byte size for ABI versioning.
+ * If attached to a graph, an instantiated GraphExec retains the arena descriptor and owns the
+ * backend workspace allocation required for launch. Arena-backed memory is not directly accessible
+ * by callers and is not patchable in Phase 2.
+ */
+typedef struct mg_arena_desc {
+    size_t size;
+    size_t byte_count;
+    size_t alignment;
+} mg_arena_desc_t;
+
+/*
+ * Phase 2 workspace requirement descriptor.
+ *
+ * A workspace node declares transient graph-exec-owned memory needed by future or internal
+ * execution steps. byte_count and alignment must be nonzero; alignment must be a power of two. The
+ * size field is the descriptor byte size for ABI versioning. Layout is computed during
+ * mgGraphInstantiate and is not stable across instantiations. Phase 2 uses conservative monotonic,
+ * non-overlapping layout and provides no launch-time alloc/free semantics.
+ */
+typedef struct mg_workspace_desc {
+    size_t size;
+    size_t byte_count;
+    size_t alignment;
+} mg_workspace_desc_t;
+
 MG_API mg_version_t mgVersion(void);
 MG_API const char *mgVersionString(void);
 MG_API const char *mgStatusString(mg_status_t status);
@@ -157,9 +192,28 @@ MG_API mg_status_t mgEventCreate(mg_device_t *device, mg_event_t **out_event,
                                  mg_error_t **out_error);
 MG_API void mgEventDestroy(mg_event_t *event);
 
+/*
+ * Creates a caller-owned transient arena descriptor. Destroy with mgArenaDestroy. The arena object
+ * does not expose direct memory access; backend workspace is materialized during graph
+ * instantiation and owned by the resulting GraphExec.
+ */
+MG_API mg_status_t mgArenaCreate(mg_device_t *device, const mg_arena_desc_t *desc,
+                                 mg_arena_t **out_arena, mg_error_t **out_error);
+MG_API void mgArenaDestroy(mg_arena_t *arena);
+MG_API size_t mgArenaSize(const mg_arena_t *arena);
+MG_API size_t mgArenaAlignment(const mg_arena_t *arena);
+
 /* Creates a mutable graph. Destroy with mgGraphDestroy. */
 MG_API mg_status_t mgGraphCreate(mg_graph_t **out_graph, mg_error_t **out_error);
 MG_API void mgGraphDestroy(mg_graph_t *graph);
+
+/*
+ * Optionally attaches a caller-owned arena descriptor to a graph. The graph retains the arena until
+ * graph destruction or replacement. GraphExec retains its own arena reference during
+ * instantiation, so destroying the source graph after successful instantiation does not invalidate
+ * workspace owned by the exec.
+ */
+MG_API mg_status_t mgGraphSetArena(mg_graph_t *graph, mg_arena_t *arena, mg_error_t **out_error);
 
 /*
  * Nodes are owned by their parent graph and are invalid after mgGraphDestroy.
@@ -185,6 +239,13 @@ MG_API mg_status_t mgGraphAddEventSignalNode(mg_graph_t *graph, mg_event_t *even
  */
 MG_API mg_status_t mgGraphAddBarrierNode(mg_graph_t *graph, mg_node_t **out_node,
                                          mg_error_t **out_error);
+/*
+ * Adds a graph-owned workspace requirement node. The node encodes no public compute operation and
+ * exists to reserve graph-exec-owned transient memory during instantiation. It is not patchable in
+ * Phase 2 and does not expose arena offsets to callers.
+ */
+MG_API mg_status_t mgGraphAddWorkspaceNode(mg_graph_t *graph, const mg_workspace_desc_t *desc,
+                                           mg_node_t **out_node, mg_error_t **out_error);
 MG_API mg_node_id_t mgNodeId(const mg_node_t *node);
 MG_API mg_status_t mgGraphAddDependency(mg_graph_t *graph, mg_node_t *before, mg_node_t *after,
                                         mg_error_t **out_error);

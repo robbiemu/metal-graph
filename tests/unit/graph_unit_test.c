@@ -119,13 +119,61 @@ int main(void) {
     mgErrorDestroy(error);
     error = NULL;
 
+    mg_arena_desc_t invalid_arena;
+    memset(&invalid_arena, 0, sizeof(invalid_arena));
+    invalid_arena.size = sizeof(invalid_arena);
+    invalid_arena.byte_count = 64;
+    invalid_arena.alignment = 16;
+    if (expect_status(mgArenaCreate(NULL, &invalid_arena, NULL, &error), MG_STATUS_INVALID_ARGUMENT,
+                      "reject invalid arena create")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 11;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    if (expect_status(mgGraphSetArena(graph, NULL, &error), MG_STATUS_INVALID_ARGUMENT,
+                      "reject null graph arena")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 12;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    mg_workspace_desc_t invalid_workspace;
+    memset(&invalid_workspace, 0, sizeof(invalid_workspace));
+    invalid_workspace.size = sizeof(invalid_workspace);
+    invalid_workspace.byte_count = 64;
+    invalid_workspace.alignment = 3;
+    if (expect_status(mgGraphAddWorkspaceNode(graph, &invalid_workspace, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject invalid workspace alignment")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 13;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    mg_workspace_desc_t workspace;
+    memset(&workspace, 0, sizeof(workspace));
+    workspace.size = sizeof(workspace);
+    workspace.byte_count = 64;
+    workspace.alignment = 16;
+    if (expect_status(mgGraphAddWorkspaceNode(graph, &workspace, &invalid, &error), MG_STATUS_OK,
+                      "add workspace node")) {
+        mgGraphDestroy(graph);
+        return 14;
+    }
+
     mg_dispatch_desc_t invalid_desc = test_dispatch_desc();
     invalid_desc.size = 0;
     if (expect_status(mgGraphAddDispatchNode(graph, &invalid_desc, &invalid, &error),
                       MG_STATUS_INVALID_ARGUMENT, "reject short dispatch descriptor")) {
         mgErrorDestroy(error);
         mgGraphDestroy(graph);
-        return 11;
+        return 15;
     }
     mgErrorDestroy(error);
     error = NULL;
@@ -138,7 +186,7 @@ int main(void) {
                       MG_STATUS_INVALID_ARGUMENT, "reject invalid buffer binding")) {
         mgErrorDestroy(error);
         mgGraphDestroy(graph);
-        return 12;
+        return 16;
     }
     mgErrorDestroy(error);
     error = NULL;
@@ -151,20 +199,20 @@ int main(void) {
         expect_status(mgGraphAddDispatchNode(graph, &desc, &second, &error), MG_STATUS_OK,
                       "add second node")) {
         mgGraphDestroy(graph);
-        return 13;
+        return 17;
     }
 
     if (mgNodeId(first) == MG_NODE_ID_INVALID || mgNodeId(second) == MG_NODE_ID_INVALID) {
         fprintf(stderr, "node ids should be valid\n");
         mgGraphDestroy(graph);
-        return 14;
+        return 18;
     }
 
     if (expect_status(mgGraphAddDependency(graph, first, first, &error), MG_STATUS_INVALID_TOPOLOGY,
                       "reject self dependency")) {
         mgErrorDestroy(error);
         mgGraphDestroy(graph);
-        return 15;
+        return 19;
     }
     mgErrorDestroy(error);
     error = NULL;
@@ -175,27 +223,27 @@ int main(void) {
                       "ignore duplicate dependency") ||
         expect_status(mgGraphValidate(graph, &error), MG_STATUS_OK, "validate acyclic graph")) {
         mgGraphDestroy(graph);
-        return 16;
+        return 20;
     }
 
     mg_status_t cycle_status = mgGraphAddDependency(graph, second, first, &error);
     if (expect_status(cycle_status, MG_STATUS_OK, "add cycle edge")) {
         mgGraphDestroy(graph);
-        return 17;
+        return 21;
     }
 
     cycle_status = mgGraphValidate(graph, &error);
     if (expect_status(cycle_status, MG_STATUS_INVALID_TOPOLOGY, "validate cyclic graph")) {
         mgErrorDestroy(error);
         mgGraphDestroy(graph);
-        return 18;
+        return 22;
     }
 
     if (mgErrorStage(error) != MG_ERROR_STAGE_VALIDATE) {
         fprintf(stderr, "cycle error should come from validate stage\n");
         mgErrorDestroy(error);
         mgGraphDestroy(graph);
-        return 19;
+        return 23;
     }
 
     mgErrorDestroy(error);

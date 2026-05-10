@@ -118,6 +118,15 @@ void mg_node_clear(mg_node_t *node) {
         break;
     case MG_NODE_BARRIER:
         break;
+    case MG_NODE_WORKSPACE:
+        memset(&node->as.workspace, 0, sizeof(node->as.workspace));
+        break;
+    default:
+        if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
+            mg_buffer_release(node->as.workspace_fill.dst);
+            memset(&node->as.workspace_fill, 0, sizeof(node->as.workspace_fill));
+        }
+        break;
     }
 }
 
@@ -153,7 +162,25 @@ void mgGraphDestroy(mg_graph_t *graph) {
 
     free(graph->nodes);
     free(graph->edges);
+    mg_arena_release(graph->arena);
     free(graph);
+}
+
+mg_status_t mgGraphSetArena(mg_graph_t *graph, mg_arena_t *arena, mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (!graph || !arena) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "graph and arena are required", NULL);
+    }
+
+    if (graph->arena == arena) {
+        return MG_STATUS_OK;
+    }
+
+    mg_arena_retain(arena);
+    mg_arena_release(graph->arena);
+    graph->arena = arena;
+    return MG_STATUS_OK;
 }
 
 mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *desc,
@@ -351,6 +378,78 @@ mg_status_t mgGraphAddBarrierNode(mg_graph_t *graph, mg_node_t **out_node, mg_er
         return status;
     }
 
+    mg_graph_commit_node(graph, node, out_node);
+    return MG_STATUS_OK;
+}
+
+mg_status_t mgGraphAddWorkspaceNode(mg_graph_t *graph, const mg_workspace_desc_t *desc,
+                                    mg_node_t **out_node, mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (out_node) {
+        *out_node = NULL;
+    }
+
+    if (!graph || !out_node) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "graph and out_node are required", NULL);
+    }
+
+    mg_status_t status = mg_workspace_desc_validate(desc, MG_ERROR_STAGE_CREATE, out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+
+    mg_node_t *node = NULL;
+    status = mg_graph_alloc_node(graph, MG_NODE_WORKSPACE, &node, out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+
+    node->as.workspace.size = desc->byte_count;
+    node->as.workspace.alignment = desc->alignment;
+    mg_graph_commit_node(graph, node, out_node);
+    return MG_STATUS_OK;
+}
+
+mg_status_t mg_internal_graph_add_workspace_fill_node(mg_graph_t *graph,
+                                                      const mg_workspace_desc_t *desc,
+                                                      uint8_t value, mg_buffer_t *dst,
+                                                      size_t dst_offset, mg_node_t **out_node,
+                                                      mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (out_node) {
+        *out_node = NULL;
+    }
+
+    if (!graph || !dst || !out_node) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "graph, dst, and out_node are required", NULL);
+    }
+
+    mg_status_t status = mg_workspace_desc_validate(desc, MG_ERROR_STAGE_CREATE, out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+
+    if (!mg_range_valid(dst->length, dst_offset, desc->byte_count)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "workspace fill destination range is invalid",
+                            NULL);
+    }
+
+    mg_node_t *node = NULL;
+    status = mg_graph_alloc_node(graph, (mg_node_kind_t)MG_NODE_INTERNAL_WORKSPACE_FILL, &node,
+                                 out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+
+    node->as.workspace_fill.size = desc->byte_count;
+    node->as.workspace_fill.alignment = desc->alignment;
+    node->as.workspace_fill.value = value;
+    node->as.workspace_fill.dst = dst;
+    node->as.workspace_fill.dst_offset = dst_offset;
+    mg_buffer_retain(dst);
     mg_graph_commit_node(graph, node, out_node);
     return MG_STATUS_OK;
 }

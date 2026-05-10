@@ -44,6 +44,21 @@ typedef struct mg_event_node {
     uint64_t value;
 } mg_event_node_t;
 
+typedef struct mg_workspace_node {
+    size_t size;
+    size_t alignment;
+} mg_workspace_node_t;
+
+typedef struct mg_internal_workspace_fill_node {
+    size_t size;
+    size_t alignment;
+    uint8_t value;
+    mg_buffer_t *dst;
+    size_t dst_offset;
+} mg_internal_workspace_fill_node_t;
+
+enum { MG_NODE_INTERNAL_WORKSPACE_FILL = 1000 };
+
 struct mg_error {
     mg_status_t status;
     mg_error_stage_t stage;
@@ -71,6 +86,12 @@ struct mg_event {
     uint32_t ref_count;
 };
 
+struct mg_arena {
+    size_t size;
+    size_t alignment;
+    uint32_t ref_count;
+};
+
 struct mg_node {
     mg_graph_t *graph;
     mg_node_id_t id;
@@ -81,6 +102,8 @@ struct mg_node {
         mg_copy_node_t copy;
         mg_fill_node_t fill;
         mg_event_node_t event;
+        mg_workspace_node_t workspace;
+        mg_internal_workspace_fill_node_t workspace_fill;
     } as;
 };
 
@@ -91,6 +114,7 @@ struct mg_graph {
     mg_edge_t *edges;
     size_t edge_count;
     size_t edge_capacity;
+    mg_arena_t *arena;
 };
 
 typedef struct mg_exec_dispatch {
@@ -127,6 +151,23 @@ typedef struct mg_exec_event {
     uint64_t value;
 } mg_exec_event_t;
 
+typedef struct mg_exec_workspace {
+    mg_node_id_t id;
+    size_t size;
+    size_t alignment;
+    size_t offset;
+} mg_exec_workspace_t;
+
+typedef struct mg_exec_workspace_fill {
+    mg_node_id_t id;
+    size_t size;
+    size_t alignment;
+    size_t offset;
+    uint8_t value;
+    mg_buffer_t *dst;
+    size_t dst_offset;
+} mg_exec_workspace_fill_t;
+
 typedef struct mg_exec_node {
     mg_node_kind_t kind;
     union {
@@ -135,13 +176,32 @@ typedef struct mg_exec_node {
         mg_exec_fill_t fill;
         mg_exec_event_t event;
         mg_node_id_t barrier_id;
+        mg_exec_workspace_t workspace;
+        mg_exec_workspace_fill_t workspace_fill;
     } as;
 } mg_exec_node_t;
+
+typedef struct mg_workspace_record {
+    mg_node_id_t node_id;
+    size_t size;
+    size_t alignment;
+    size_t offset;
+} mg_workspace_record_t;
+
+typedef struct mg_workspace_plan {
+    mg_workspace_record_t *records;
+    size_t record_count;
+    size_t total_size;
+    size_t alignment;
+    mg_arena_t *arena;
+    void *backend_impl;
+} mg_workspace_plan_t;
 
 struct mg_graph_exec {
     mg_exec_node_t *nodes;
     size_t node_count;
     void *device_impl;
+    mg_workspace_plan_t workspace;
 };
 
 struct mg_launch {
@@ -150,6 +210,7 @@ struct mg_launch {
     size_t retained_buffer_count;
     mg_event_t **retained_events;
     size_t retained_event_count;
+    void *retained_workspace_impl;
 };
 
 char *mg_strdup(const char *value);
@@ -167,6 +228,24 @@ void mg_buffer_retain(mg_buffer_t *buffer);
 void mg_buffer_release(mg_buffer_t *buffer);
 void mg_event_retain(mg_event_t *event);
 void mg_event_release(mg_event_t *event);
+void mg_arena_retain(mg_arena_t *arena);
+void mg_arena_release(mg_arena_t *arena);
+
+bool mg_alignment_valid(size_t alignment);
+bool mg_align_up_size(size_t value, size_t alignment, size_t *out_value);
+mg_status_t mg_workspace_desc_validate(const mg_workspace_desc_t *desc, mg_error_stage_t stage,
+                                       mg_error_t **out_error);
+mg_status_t mg_graph_plan_workspace(const mg_graph_t *graph, const size_t *order,
+                                    mg_workspace_plan_t *out_plan, mg_error_t **out_error);
+void mg_workspace_plan_clear(mg_workspace_plan_t *plan);
+mg_status_t mg_workspace_plan_offset_for_node(const mg_workspace_plan_t *plan, mg_node_id_t node_id,
+                                              size_t *out_offset, mg_error_t **out_error);
+
+mg_status_t mg_internal_graph_add_workspace_fill_node(mg_graph_t *graph,
+                                                      const mg_workspace_desc_t *desc,
+                                                      uint8_t value, mg_buffer_t *dst,
+                                                      size_t dst_offset, mg_node_t **out_node,
+                                                      mg_error_t **out_error);
 
 void mg_backend_device_destroy(mg_device_t *device);
 void mg_backend_stream_destroy(mg_stream_t *stream);
