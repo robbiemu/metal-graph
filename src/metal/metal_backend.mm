@@ -140,7 +140,7 @@ static mg_status_t mg_clone_exec_node(const mg_node_t *src, mg_exec_node_t *dst,
                         "unknown node kind", NULL);
 }
 
-mg_status_t mg_device_create_system_default(mg_device_t **out_device, mg_error_t **out_error) {
+mg_status_t mgDeviceCreateSystemDefault(mg_device_t **out_device, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!out_device) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
@@ -175,7 +175,7 @@ void mg_backend_device_destroy(mg_device_t *device) {
     device->impl = NULL;
 }
 
-void mg_device_destroy(mg_device_t *device) {
+void mgDeviceDestroy(mg_device_t *device) {
     if (!device) {
         return;
     }
@@ -184,8 +184,7 @@ void mg_device_destroy(mg_device_t *device) {
     free(device);
 }
 
-mg_status_t mg_stream_create(mg_device_t *device, mg_stream_t **out_stream,
-                             mg_error_t **out_error) {
+mg_status_t mgStreamCreate(mg_device_t *device, mg_stream_t **out_stream, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!device || !device->impl || !out_stream) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
@@ -220,7 +219,7 @@ void mg_backend_stream_destroy(mg_stream_t *stream) {
     stream->impl = NULL;
 }
 
-void mg_stream_destroy(mg_stream_t *stream) {
+void mgStreamDestroy(mg_stream_t *stream) {
     if (!stream) {
         return;
     }
@@ -229,8 +228,8 @@ void mg_stream_destroy(mg_stream_t *stream) {
     free(stream);
 }
 
-mg_status_t mg_buffer_create_shared(mg_device_t *device, size_t length, mg_buffer_t **out_buffer,
-                                    mg_error_t **out_error) {
+mg_status_t mgBufferCreateShared(mg_device_t *device, size_t length, mg_buffer_t **out_buffer,
+                                 mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!device || !device->impl || !out_buffer || length == 0) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
@@ -269,7 +268,7 @@ void mg_backend_buffer_destroy(mg_buffer_t *buffer) {
     buffer->impl = NULL;
 }
 
-mg_status_t mg_event_create(mg_device_t *device, mg_event_t **out_event, mg_error_t **out_error) {
+mg_status_t mgEventCreate(mg_device_t *device, mg_event_t **out_event, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!device || !device->impl || !out_event) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
@@ -319,8 +318,8 @@ void *mg_backend_buffer_contents(mg_buffer_t *buffer) {
     return [metalBuffer contents];
 }
 
-mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_exec_t **out_exec,
-                                 mg_error_t **out_error) {
+mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_exec_t **out_exec,
+                               mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!graph || !device || !device->impl || !out_exec) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_INSTANTIATE,
@@ -328,7 +327,7 @@ mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_grap
     }
 
     *out_exec = NULL;
-    mg_status_t status = mg_graph_validate(graph, out_error);
+    mg_status_t status = mgGraphValidate(graph, out_error);
     if (status != MG_STATUS_OK) {
         return status;
     }
@@ -370,7 +369,7 @@ mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_grap
         status = mg_clone_exec_node(node, &exec->nodes[i], out_error);
         if (status != MG_STATUS_OK) {
             free(order);
-            mg_graph_exec_destroy(exec);
+            mgGraphExecDestroy(exec);
             return status;
         }
 
@@ -388,7 +387,7 @@ mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_grap
             mg_status_t errorStatus = mg_set_error(
                 out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_INSTANTIATE, dispatch->id,
                 "failed to load Metal library", mg_ns_error_message(libraryError));
-            mg_graph_exec_destroy(exec);
+            mgGraphExecDestroy(exec);
             return errorStatus;
         }
 
@@ -398,7 +397,7 @@ mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_grap
             mg_status_t errorStatus =
                 mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_INSTANTIATE,
                              dispatch->id, "failed to find Metal kernel function", NULL);
-            mg_graph_exec_destroy(exec);
+            mgGraphExecDestroy(exec);
             return errorStatus;
         }
 
@@ -410,7 +409,7 @@ mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_grap
             mg_status_t errorStatus = mg_set_error(
                 out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_INSTANTIATE, dispatch->id,
                 "failed to create Metal compute pipeline", mg_ns_error_message(pipelineError));
-            mg_graph_exec_destroy(exec);
+            mgGraphExecDestroy(exec);
             return errorStatus;
         }
 
@@ -438,7 +437,7 @@ void mg_backend_graph_exec_destroy(mg_graph_exec_t *exec) {
     }
 }
 
-void mg_graph_exec_destroy(mg_graph_exec_t *exec) {
+void mgGraphExecDestroy(mg_graph_exec_t *exec) {
     if (!exec) {
         return;
     }
@@ -448,8 +447,8 @@ void mg_graph_exec_destroy(mg_graph_exec_t *exec) {
     free(exec);
 }
 
-mg_status_t mg_graph_launch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_t **out_launch,
-                            mg_error_t **out_error) {
+mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_t **out_launch,
+                          mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!exec || !stream || !stream->impl || !out_launch) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_ENCODE,
@@ -518,7 +517,7 @@ mg_status_t mg_graph_launch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launc
             mg_exec_dispatch_t *dispatch = &node->as.dispatch;
             id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
             if (!encoder) {
-                mg_launch_destroy(launch);
+                mgLaunchDestroy(launch);
                 return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE,
                                     dispatch->id, "failed to create Metal compute encoder", NULL);
             }
@@ -548,7 +547,7 @@ mg_status_t mg_graph_launch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launc
         case MG_NODE_COPY: {
             id<MTLBlitCommandEncoder> encoder = [commandBuffer blitCommandEncoder];
             if (!encoder) {
-                mg_launch_destroy(launch);
+                mgLaunchDestroy(launch);
                 return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE,
                                     node->as.copy.id, "failed to create Metal blit encoder", NULL);
             }
@@ -569,7 +568,7 @@ mg_status_t mg_graph_launch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launc
         case MG_NODE_FILL: {
             id<MTLBlitCommandEncoder> encoder = [commandBuffer blitCommandEncoder];
             if (!encoder) {
-                mg_launch_destroy(launch);
+                mgLaunchDestroy(launch);
                 return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE,
                                     node->as.fill.id, "failed to create Metal blit encoder", NULL);
             }
@@ -605,7 +604,7 @@ mg_status_t mg_graph_launch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launc
     return MG_STATUS_OK;
 }
 
-mg_status_t mg_launch_synchronize(mg_launch_t *launch, mg_error_t **out_error) {
+mg_status_t mgLaunchSynchronize(mg_launch_t *launch, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!launch || !launch->impl) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_SYNC,
@@ -642,7 +641,7 @@ void mg_backend_launch_destroy(mg_launch_t *launch) {
     }
 }
 
-void mg_launch_destroy(mg_launch_t *launch) {
+void mgLaunchDestroy(mg_launch_t *launch) {
     if (!launch) {
         return;
     }

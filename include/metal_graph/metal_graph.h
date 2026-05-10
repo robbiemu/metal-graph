@@ -117,34 +117,33 @@ typedef struct mg_fill_desc {
     uint8_t value;
 } mg_fill_desc_t;
 
-MG_API mg_version_t mg_version(void);
-MG_API const char *mg_version_string(void);
-MG_API const char *mg_status_string(mg_status_t status);
+MG_API mg_version_t mgVersion(void);
+MG_API const char *mgVersionString(void);
+MG_API const char *mgStatusString(mg_status_t status);
 
-/* Errors returned through out_error are owned by the caller. Destroy with mg_error_destroy. */
-MG_API void mg_error_destroy(mg_error_t *error);
-MG_API mg_status_t mg_error_status(const mg_error_t *error);
-MG_API mg_error_stage_t mg_error_stage(const mg_error_t *error);
-MG_API mg_node_id_t mg_error_node_id(const mg_error_t *error);
-MG_API const char *mg_error_message(const mg_error_t *error);
-MG_API const char *mg_error_backend_message(const mg_error_t *error);
+/* Errors returned through out_error are owned by the caller. Destroy with mgErrorDestroy. */
+MG_API void mgErrorDestroy(mg_error_t *error);
+MG_API mg_status_t mgErrorStatus(const mg_error_t *error);
+MG_API mg_error_stage_t mgErrorStage(const mg_error_t *error);
+MG_API mg_node_id_t mgErrorNodeId(const mg_error_t *error);
+MG_API const char *mgErrorMessage(const mg_error_t *error);
+MG_API const char *mgErrorBackendMessage(const mg_error_t *error);
 
-/* Creates a device handle for the system default Metal device. Destroy with mg_device_destroy. */
-MG_API mg_status_t mg_device_create_system_default(mg_device_t **out_device,
-                                                   mg_error_t **out_error);
-MG_API void mg_device_destroy(mg_device_t *device);
+/* Creates a device handle for the system default Metal device. Destroy with mgDeviceDestroy. */
+MG_API mg_status_t mgDeviceCreateSystemDefault(mg_device_t **out_device, mg_error_t **out_error);
+MG_API void mgDeviceDestroy(mg_device_t *device);
 
-/* Creates a stream backed by a Metal command queue. Destroy with mg_stream_destroy. */
-MG_API mg_status_t mg_stream_create(mg_device_t *device, mg_stream_t **out_stream,
-                                    mg_error_t **out_error);
-MG_API void mg_stream_destroy(mg_stream_t *stream);
+/* Creates a stream backed by a Metal command queue. Destroy with mgStreamDestroy. */
+MG_API mg_status_t mgStreamCreate(mg_device_t *device, mg_stream_t **out_stream,
+                                  mg_error_t **out_error);
+MG_API void mgStreamDestroy(mg_stream_t *stream);
 
-/* Creates a shared, host-visible buffer. Destroy with mg_buffer_destroy. */
-MG_API mg_status_t mg_buffer_create_shared(mg_device_t *device, size_t length,
-                                           mg_buffer_t **out_buffer, mg_error_t **out_error);
-MG_API void mg_buffer_destroy(mg_buffer_t *buffer);
-MG_API size_t mg_buffer_length(const mg_buffer_t *buffer);
-MG_API void *mg_buffer_contents(mg_buffer_t *buffer);
+/* Creates a shared, host-visible buffer. Destroy with mgBufferDestroy. */
+MG_API mg_status_t mgBufferCreateShared(mg_device_t *device, size_t length,
+                                        mg_buffer_t **out_buffer, mg_error_t **out_error);
+MG_API void mgBufferDestroy(mg_buffer_t *buffer);
+MG_API size_t mgBufferLength(const mg_buffer_t *buffer);
+MG_API void *mgBufferContents(mg_buffer_t *buffer);
 
 /*
  * Creates a caller-owned timeline event.
@@ -152,70 +151,55 @@ MG_API void *mg_buffer_contents(mg_buffer_t *buffer);
  * On Apple platforms this is backed by MTLSharedEvent. The event should outlive graph node
  * creation; instantiated GraphExec objects retain events they need for relaunch and in-flight
  * launches. Timeline wait/signal values are explicit uint64_t values. Destroy with
- * mg_event_destroy. Unsupported backends return MG_STATUS_UNSUPPORTED.
+ * mgEventDestroy. Unsupported backends return MG_STATUS_UNSUPPORTED.
  */
-MG_API mg_status_t mg_event_create(mg_device_t *device, mg_event_t **out_event,
-                                   mg_error_t **out_error);
-MG_API void mg_event_destroy(mg_event_t *event);
 MG_API mg_status_t mgEventCreate(mg_device_t *device, mg_event_t **out_event,
                                  mg_error_t **out_error);
 MG_API void mgEventDestroy(mg_event_t *event);
 
-/* Creates a mutable graph. Destroy with mg_graph_destroy. */
-MG_API mg_status_t mg_graph_create(mg_graph_t **out_graph, mg_error_t **out_error);
-MG_API void mg_graph_destroy(mg_graph_t *graph);
+/* Creates a mutable graph. Destroy with mgGraphDestroy. */
+MG_API mg_status_t mgGraphCreate(mg_graph_t **out_graph, mg_error_t **out_error);
+MG_API void mgGraphDestroy(mg_graph_t *graph);
 
 /*
- * Nodes are owned by their parent graph and are invalid after mg_graph_destroy.
+ * Nodes are owned by their parent graph and are invalid after mgGraphDestroy.
  * Phase 1 nodes are not patchable; instantiate a new graph exec to change node parameters.
  */
-MG_API mg_status_t mg_graph_add_dispatch_node(mg_graph_t *graph, const mg_dispatch_desc_t *desc,
-                                              mg_node_t **out_node, mg_error_t **out_error);
-/* Adds a graph-owned copy node. Parameters are frozen at instantiation and not patchable. */
-MG_API mg_status_t mg_graph_add_copy_node(mg_graph_t *graph, const mg_copy_desc_t *desc,
+MG_API mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *desc,
                                           mg_node_t **out_node, mg_error_t **out_error);
+/* Adds a graph-owned copy node. Parameters are frozen at instantiation and not patchable. */
 MG_API mg_status_t mgGraphAddCopyNode(mg_graph_t *graph, const mg_copy_desc_t *desc,
                                       mg_node_t **out_node, mg_error_t **out_error);
 /* Adds a graph-owned 8-bit fill node. Parameters are frozen at instantiation and not patchable. */
-MG_API mg_status_t mg_graph_add_fill_node(mg_graph_t *graph, const mg_fill_desc_t *desc,
-                                          mg_node_t **out_node, mg_error_t **out_error);
 MG_API mg_status_t mgGraphAddFillNode(mg_graph_t *graph, const mg_fill_desc_t *desc,
                                       mg_node_t **out_node, mg_error_t **out_error);
 /* Adds a graph-owned timeline wait node for event >= value. Not patchable in Phase 1. */
-MG_API mg_status_t mg_graph_add_event_wait_node(mg_graph_t *graph, mg_event_t *event,
-                                                uint64_t value, mg_node_t **out_node,
-                                                mg_error_t **out_error);
 MG_API mg_status_t mgGraphAddEventWaitNode(mg_graph_t *graph, mg_event_t *event, uint64_t value,
                                            mg_node_t **out_node, mg_error_t **out_error);
 /* Adds a graph-owned timeline signal node for event = value. Not patchable in Phase 1. */
-MG_API mg_status_t mg_graph_add_event_signal_node(mg_graph_t *graph, mg_event_t *event,
-                                                  uint64_t value, mg_node_t **out_node,
-                                                  mg_error_t **out_error);
 MG_API mg_status_t mgGraphAddEventSignalNode(mg_graph_t *graph, mg_event_t *event, uint64_t value,
                                              mg_node_t **out_node, mg_error_t **out_error);
 /*
  * Adds a graph-owned conservative barrier node. In Phase 1 this is an ordering node for the
  * single-queue graph plan; it does not expose or require a public fence object.
  */
-MG_API mg_status_t mg_graph_add_barrier_node(mg_graph_t *graph, mg_node_t **out_node,
-                                             mg_error_t **out_error);
 MG_API mg_status_t mgGraphAddBarrierNode(mg_graph_t *graph, mg_node_t **out_node,
                                          mg_error_t **out_error);
-MG_API mg_node_id_t mg_node_id(const mg_node_t *node);
-MG_API mg_status_t mg_graph_add_dependency(mg_graph_t *graph, mg_node_t *before, mg_node_t *after,
-                                           mg_error_t **out_error);
-MG_API mg_status_t mg_graph_validate(const mg_graph_t *graph, mg_error_t **out_error);
+MG_API mg_node_id_t mgNodeId(const mg_node_t *node);
+MG_API mg_status_t mgGraphAddDependency(mg_graph_t *graph, mg_node_t *before, mg_node_t *after,
+                                        mg_error_t **out_error);
+MG_API mg_status_t mgGraphValidate(const mg_graph_t *graph, mg_error_t **out_error);
 
 /* Instantiates a frozen graph snapshot. The exec may outlive the source graph. */
-MG_API mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device,
-                                        mg_graph_exec_t **out_exec, mg_error_t **out_error);
-MG_API void mg_graph_exec_destroy(mg_graph_exec_t *exec);
+MG_API mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device,
+                                      mg_graph_exec_t **out_exec, mg_error_t **out_error);
+MG_API void mgGraphExecDestroy(mg_graph_exec_t *exec);
 
-/* Launches create fresh command buffers. Launch handles are destroyed with mg_launch_destroy. */
-MG_API mg_status_t mg_graph_launch(mg_graph_exec_t *exec, mg_stream_t *stream,
-                                   mg_launch_t **out_launch, mg_error_t **out_error);
-MG_API mg_status_t mg_launch_synchronize(mg_launch_t *launch, mg_error_t **out_error);
-MG_API void mg_launch_destroy(mg_launch_t *launch);
+/* Launches create fresh command buffers. Launch handles are destroyed with mgLaunchDestroy. */
+MG_API mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream,
+                                 mg_launch_t **out_launch, mg_error_t **out_error);
+MG_API mg_status_t mgLaunchSynchronize(mg_launch_t *launch, mg_error_t **out_error);
+MG_API void mgLaunchDestroy(mg_launch_t *launch);
 
 #ifdef __cplusplus
 }

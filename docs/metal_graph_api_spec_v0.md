@@ -38,6 +38,7 @@ Phase 0 must not expose Objective-C, Swift, C++ STL, Metal framework types, indi
 ## Phase 0 Semantics
 
 - Public headers must compile as C and C++.
+- Public C functions use `mg`-prefixed camelCase names. Public types, structs, and enum values use the existing `mg_*` / `MG_*` C naming style.
 - Every fallible API returns `mg_status_t`.
 - Detailed diagnostics are returned through `mg_error_t`.
 - A graph with a cycle must fail validation with `MG_STATUS_INVALID_TOPOLOGY`.

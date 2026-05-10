@@ -5,13 +5,13 @@
 #include <string.h>
 
 static void print_error(const char *label, mg_status_t status, mg_error_t *error) {
-    fprintf(stderr, "%s failed: %s", label, mg_status_string(status));
+    fprintf(stderr, "%s failed: %s", label, mgStatusString(status));
     if (error) {
-        fprintf(stderr, " stage=%d message=%s backend=%s", (int)mg_error_stage(error),
-                mg_error_message(error), mg_error_backend_message(error));
+        fprintf(stderr, " stage=%d message=%s backend=%s", (int)mgErrorStage(error),
+                mgErrorMessage(error), mgErrorBackendMessage(error));
     }
     fprintf(stderr, "\n");
-    mg_error_destroy(error);
+    mgErrorDestroy(error);
 }
 
 static int expect_status(mg_status_t actual, mg_status_t expected, const char *label,
@@ -24,7 +24,7 @@ static int expect_status(mg_status_t actual, mg_status_t expected, const char *l
         return 1;
     }
     if (error && *error) {
-        mg_error_destroy(*error);
+        mgErrorDestroy(*error);
         *error = NULL;
     }
     return 0;
@@ -85,36 +85,36 @@ int main(void) {
     mg_graph_exec_t *exec = NULL;
     mg_launch_t *launch = NULL;
 
-    mg_status_t status = mg_device_create_system_default(&device, &error);
+    mg_status_t status = mgDeviceCreateSystemDefault(&device, &error);
     if (status == MG_STATUS_UNSUPPORTED) {
         fprintf(stderr, "skipping: no system default Metal device\n");
-        mg_error_destroy(error);
+        mgErrorDestroy(error);
         return 0;
     }
     if (expect_status(status, MG_STATUS_OK, "create device", &error)) {
         return 1;
     }
 
-    if (expect_status(mg_stream_create(device, &stream, &error), MG_STATUS_OK, "create stream",
+    if (expect_status(mgStreamCreate(device, &stream, &error), MG_STATUS_OK, "create stream",
                       &error) ||
-        expect_status(mg_buffer_create_shared(device, sizeof(uint32_t) * 4, &dst_buffer, &error),
+        expect_status(mgBufferCreateShared(device, sizeof(uint32_t) * 4, &dst_buffer, &error),
                       MG_STATUS_OK, "create destination buffer", &error) ||
-        expect_status(mg_buffer_create_shared(device, sizeof(uint32_t) * 4, &src_buffer, &error),
+        expect_status(mgBufferCreateShared(device, sizeof(uint32_t) * 4, &src_buffer, &error),
                       MG_STATUS_OK, "create source buffer", &error) ||
-        expect_status(mg_buffer_create_shared(device, 8, &fill_buffer, &error), MG_STATUS_OK,
+        expect_status(mgBufferCreateShared(device, 8, &fill_buffer, &error), MG_STATUS_OK,
                       "create fill buffer", &error)) {
         goto cleanup;
     }
 
-    uint32_t *dst_values = (uint32_t *)mg_buffer_contents(dst_buffer);
-    uint32_t *src_values = (uint32_t *)mg_buffer_contents(src_buffer);
-    uint8_t *fill_values = (uint8_t *)mg_buffer_contents(fill_buffer);
+    uint32_t *dst_values = (uint32_t *)mgBufferContents(dst_buffer);
+    uint32_t *src_values = (uint32_t *)mgBufferContents(src_buffer);
+    uint8_t *fill_values = (uint8_t *)mgBufferContents(fill_buffer);
     if (!dst_values || !src_values || !fill_values) {
         fprintf(stderr, "shared buffer contents are unavailable\n");
         goto cleanup;
     }
 
-    if (expect_status(mg_event_create(device, &event, &error), MG_STATUS_OK, "create event",
+    if (expect_status(mgEventCreate(device, &event, &error), MG_STATUS_OK, "create event",
                       &error)) {
         goto cleanup;
     }
@@ -122,22 +122,22 @@ int main(void) {
     mg_graph_t *empty_graph = NULL;
     mg_graph_exec_t *empty_exec = NULL;
     mg_launch_t *empty_launch = NULL;
-    if (expect_status(mg_graph_create(&empty_graph, &error), MG_STATUS_OK, "create empty graph",
+    if (expect_status(mgGraphCreate(&empty_graph, &error), MG_STATUS_OK, "create empty graph",
                       &error) ||
-        expect_status(mg_graph_instantiate(empty_graph, device, &empty_exec, &error), MG_STATUS_OK,
+        expect_status(mgGraphInstantiate(empty_graph, device, &empty_exec, &error), MG_STATUS_OK,
                       "instantiate empty graph", &error) ||
-        expect_status(mg_graph_launch(empty_exec, stream, &empty_launch, &error), MG_STATUS_OK,
+        expect_status(mgGraphLaunch(empty_exec, stream, &empty_launch, &error), MG_STATUS_OK,
                       "launch empty graph", &error) ||
-        expect_status(mg_launch_synchronize(empty_launch, &error), MG_STATUS_OK, "sync empty graph",
+        expect_status(mgLaunchSynchronize(empty_launch, &error), MG_STATUS_OK, "sync empty graph",
                       &error)) {
-        mg_launch_destroy(empty_launch);
-        mg_graph_exec_destroy(empty_exec);
-        mg_graph_destroy(empty_graph);
+        mgLaunchDestroy(empty_launch);
+        mgGraphExecDestroy(empty_exec);
+        mgGraphDestroy(empty_graph);
         goto cleanup;
     }
-    mg_launch_destroy(empty_launch);
-    mg_graph_exec_destroy(empty_exec);
-    mg_graph_destroy(empty_graph);
+    mgLaunchDestroy(empty_launch);
+    mgGraphExecDestroy(empty_exec);
+    mgGraphDestroy(empty_graph);
 
     mg_dispatch_desc_t dispatch_desc = add_one_desc(dst_buffer);
     mg_dispatch_desc_t bad_kernel_desc = dispatch_desc;
@@ -145,55 +145,54 @@ int main(void) {
     mg_graph_t *bad_graph = NULL;
     mg_node_t *bad_node = NULL;
     mg_graph_exec_t *bad_exec = NULL;
-    if (expect_status(mg_graph_create(&bad_graph, &error), MG_STATUS_OK, "create bad graph",
+    if (expect_status(mgGraphCreate(&bad_graph, &error), MG_STATUS_OK, "create bad graph",
                       &error) ||
-        expect_status(mg_graph_add_dispatch_node(bad_graph, &bad_kernel_desc, &bad_node, &error),
+        expect_status(mgGraphAddDispatchNode(bad_graph, &bad_kernel_desc, &bad_node, &error),
                       MG_STATUS_OK, "add bad dispatch", &error)) {
-        mg_graph_destroy(bad_graph);
+        mgGraphDestroy(bad_graph);
         goto cleanup;
     }
-    status = mg_graph_instantiate(bad_graph, device, &bad_exec, &error);
-    mg_graph_destroy(bad_graph);
+    status = mgGraphInstantiate(bad_graph, device, &bad_exec, &error);
+    mgGraphDestroy(bad_graph);
     if (status != MG_STATUS_BACKEND_ERROR) {
         if (status == MG_STATUS_OK) {
-            mg_graph_exec_destroy(bad_exec);
+            mgGraphExecDestroy(bad_exec);
         }
         print_error("instantiate bad graph should fail", status, error);
         error = NULL;
         goto cleanup;
     }
-    mg_error_destroy(error);
+    mgErrorDestroy(error);
     error = NULL;
 
     mg_graph_t *cycle_graph = NULL;
     mg_node_t *cycle_first = NULL;
     mg_node_t *cycle_second = NULL;
     mg_graph_exec_t *cycle_exec = NULL;
-    if (expect_status(mg_graph_create(&cycle_graph, &error), MG_STATUS_OK, "create cycle graph",
+    if (expect_status(mgGraphCreate(&cycle_graph, &error), MG_STATUS_OK, "create cycle graph",
                       &error) ||
-        expect_status(mg_graph_add_dispatch_node(cycle_graph, &dispatch_desc, &cycle_first, &error),
+        expect_status(mgGraphAddDispatchNode(cycle_graph, &dispatch_desc, &cycle_first, &error),
                       MG_STATUS_OK, "add cycle first", &error) ||
-        expect_status(
-            mg_graph_add_dispatch_node(cycle_graph, &dispatch_desc, &cycle_second, &error),
-            MG_STATUS_OK, "add cycle second", &error) ||
-        expect_status(mg_graph_add_dependency(cycle_graph, cycle_first, cycle_second, &error),
+        expect_status(mgGraphAddDispatchNode(cycle_graph, &dispatch_desc, &cycle_second, &error),
+                      MG_STATUS_OK, "add cycle second", &error) ||
+        expect_status(mgGraphAddDependency(cycle_graph, cycle_first, cycle_second, &error),
                       MG_STATUS_OK, "add cycle edge a", &error) ||
-        expect_status(mg_graph_add_dependency(cycle_graph, cycle_second, cycle_first, &error),
+        expect_status(mgGraphAddDependency(cycle_graph, cycle_second, cycle_first, &error),
                       MG_STATUS_OK, "add cycle edge b", &error)) {
-        mg_graph_destroy(cycle_graph);
+        mgGraphDestroy(cycle_graph);
         goto cleanup;
     }
-    status = mg_graph_instantiate(cycle_graph, device, &cycle_exec, &error);
-    mg_graph_destroy(cycle_graph);
+    status = mgGraphInstantiate(cycle_graph, device, &cycle_exec, &error);
+    mgGraphDestroy(cycle_graph);
     if (status != MG_STATUS_INVALID_TOPOLOGY) {
         if (status == MG_STATUS_OK) {
-            mg_graph_exec_destroy(cycle_exec);
+            mgGraphExecDestroy(cycle_exec);
         }
         print_error("instantiate cycle graph should fail", status, error);
         error = NULL;
         goto cleanup;
     }
-    mg_error_destroy(error);
+    mgErrorDestroy(error);
     error = NULL;
 
     mg_copy_desc_t invalid_copy;
@@ -202,9 +201,9 @@ int main(void) {
     invalid_copy.src = src_buffer;
     invalid_copy.dst = dst_buffer;
     invalid_copy.byte_count = 0;
-    if (expect_status(mg_graph_create(&graph, &error), MG_STATUS_OK, "create validation graph",
+    if (expect_status(mgGraphCreate(&graph, &error), MG_STATUS_OK, "create validation graph",
                       &error) ||
-        expect_status(mg_graph_add_copy_node(graph, &invalid_copy, &bad_node, &error),
+        expect_status(mgGraphAddCopyNode(graph, &invalid_copy, &bad_node, &error),
                       MG_STATUS_INVALID_ARGUMENT, "reject zero copy", &error)) {
         goto cleanup;
     }
@@ -213,13 +212,13 @@ int main(void) {
     invalid_fill.size = sizeof(invalid_fill);
     invalid_fill.dst = fill_buffer;
     invalid_fill.byte_count = 0;
-    if (expect_status(mg_graph_add_fill_node(graph, &invalid_fill, &bad_node, &error),
+    if (expect_status(mgGraphAddFillNode(graph, &invalid_fill, &bad_node, &error),
                       MG_STATUS_INVALID_ARGUMENT, "reject zero fill", &error) ||
-        expect_status(mg_graph_add_event_wait_node(graph, NULL, 0, &bad_node, &error),
+        expect_status(mgGraphAddEventWaitNode(graph, NULL, 0, &bad_node, &error),
                       MG_STATUS_INVALID_ARGUMENT, "reject null event wait", &error)) {
         goto cleanup;
     }
-    mg_graph_destroy(graph);
+    mgGraphDestroy(graph);
     graph = NULL;
 
     src_values[0] = 100;
@@ -248,46 +247,53 @@ int main(void) {
     fill_desc.byte_count = 8;
     fill_desc.value = 0xAB;
 
-    if (expect_status(mg_graph_create(&graph, &error), MG_STATUS_OK, "create phase1 graph",
-                      &error) ||
-        expect_status(mg_graph_add_event_wait_node(graph, event, 0, &wait_node, &error),
-                      MG_STATUS_OK, "add event wait", &error) ||
-        expect_status(mg_graph_add_copy_node(graph, &copy_desc, &copy_node, &error), MG_STATUS_OK,
+    if (expect_status(mgGraphCreate(&graph, &error), MG_STATUS_OK, "create phase1 graph", &error) ||
+        expect_status(mgGraphAddEventWaitNode(graph, event, 0, &wait_node, &error), MG_STATUS_OK,
+                      "add event wait", &error) ||
+        expect_status(mgGraphAddCopyNode(graph, &copy_desc, &copy_node, &error), MG_STATUS_OK,
                       "add copy", &error) ||
-        expect_status(mg_graph_add_fill_node(graph, &fill_desc, &fill_node, &error), MG_STATUS_OK,
+        expect_status(mgGraphAddFillNode(graph, &fill_desc, &fill_node, &error), MG_STATUS_OK,
                       "add fill", &error) ||
-        expect_status(mg_graph_add_barrier_node(graph, &barrier_node, &error), MG_STATUS_OK,
+        expect_status(mgGraphAddBarrierNode(graph, &barrier_node, &error), MG_STATUS_OK,
                       "add barrier", &error) ||
-        expect_status(mg_graph_add_dispatch_node(graph, &dispatch_desc, &dispatch_node, &error),
+        expect_status(mgGraphAddDispatchNode(graph, &dispatch_desc, &dispatch_node, &error),
                       MG_STATUS_OK, "add dispatch", &error) ||
-        expect_status(mg_graph_add_event_signal_node(graph, event, 1, &signal_node, &error),
+        expect_status(mgGraphAddEventSignalNode(graph, event, 1, &signal_node, &error),
                       MG_STATUS_OK, "add event signal", &error) ||
-        expect_status(mg_graph_add_dependency(graph, wait_node, copy_node, &error), MG_STATUS_OK,
+        expect_status(mgGraphAddDependency(graph, wait_node, copy_node, &error), MG_STATUS_OK,
                       "add wait-copy dependency", &error) ||
-        expect_status(mg_graph_add_dependency(graph, wait_node, fill_node, &error), MG_STATUS_OK,
+        expect_status(mgGraphAddDependency(graph, wait_node, fill_node, &error), MG_STATUS_OK,
                       "add wait-fill dependency", &error) ||
-        expect_status(mg_graph_add_dependency(graph, copy_node, barrier_node, &error), MG_STATUS_OK,
+        expect_status(mgGraphAddDependency(graph, copy_node, barrier_node, &error), MG_STATUS_OK,
                       "add copy-barrier dependency", &error) ||
-        expect_status(mg_graph_add_dependency(graph, fill_node, barrier_node, &error), MG_STATUS_OK,
+        expect_status(mgGraphAddDependency(graph, fill_node, barrier_node, &error), MG_STATUS_OK,
                       "add fill-barrier dependency", &error) ||
-        expect_status(mg_graph_add_dependency(graph, barrier_node, dispatch_node, &error),
+        expect_status(mgGraphAddDependency(graph, barrier_node, dispatch_node, &error),
                       MG_STATUS_OK, "add barrier-dispatch dependency", &error) ||
-        expect_status(mg_graph_add_dependency(graph, dispatch_node, signal_node, &error),
-                      MG_STATUS_OK, "add dispatch-signal dependency", &error) ||
-        expect_status(mg_graph_instantiate(graph, device, &exec, &error), MG_STATUS_OK,
+        expect_status(mgGraphAddDependency(graph, dispatch_node, signal_node, &error), MG_STATUS_OK,
+                      "add dispatch-signal dependency", &error) ||
+        expect_status(mgGraphInstantiate(graph, device, &exec, &error), MG_STATUS_OK,
                       "instantiate phase1 graph", &error)) {
         goto cleanup;
     }
-    mg_graph_destroy(graph);
+    mgGraphDestroy(graph);
     graph = NULL;
+    mgEventDestroy(event);
+    event = NULL;
+    mgBufferDestroy(fill_buffer);
+    fill_buffer = NULL;
+    mgBufferDestroy(src_buffer);
+    src_buffer = NULL;
+    mgBufferDestroy(dst_buffer);
+    dst_buffer = NULL;
 
-    if (expect_status(mg_graph_launch(exec, stream, &launch, &error), MG_STATUS_OK,
+    if (expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
                       "launch phase1 graph", &error) ||
-        expect_status(mg_launch_synchronize(launch, &error), MG_STATUS_OK, "sync phase1 graph",
+        expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK, "sync phase1 graph",
                       &error)) {
         goto cleanup;
     }
-    mg_launch_destroy(launch);
+    mgLaunchDestroy(launch);
     launch = NULL;
     if (check_values(dst_values, 101, 201, 301, 401, "phase1 first launch") ||
         check_fill(fill_values, 0xAB, "phase1 first fill")) {
@@ -300,9 +306,9 @@ int main(void) {
     src_values[3] = 10;
     memset(dst_values, 0, sizeof(uint32_t) * 4);
     memset(fill_values, 0, 8);
-    if (expect_status(mg_graph_launch(exec, stream, &launch, &error), MG_STATUS_OK,
+    if (expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
                       "relaunch phase1 graph", &error) ||
-        expect_status(mg_launch_synchronize(launch, &error), MG_STATUS_OK, "sync phase1 relaunch",
+        expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK, "sync phase1 relaunch",
                       &error)) {
         goto cleanup;
     }
@@ -314,15 +320,15 @@ int main(void) {
     rc = 0;
 
 cleanup:
-    mg_launch_destroy(launch);
-    mg_graph_exec_destroy(exec);
-    mg_graph_destroy(graph);
-    mg_event_destroy(event);
-    mg_buffer_destroy(fill_buffer);
-    mg_buffer_destroy(src_buffer);
-    mg_buffer_destroy(dst_buffer);
-    mg_stream_destroy(stream);
-    mg_device_destroy(device);
-    mg_error_destroy(error);
+    mgLaunchDestroy(launch);
+    mgGraphExecDestroy(exec);
+    mgGraphDestroy(graph);
+    mgEventDestroy(event);
+    mgBufferDestroy(fill_buffer);
+    mgBufferDestroy(src_buffer);
+    mgBufferDestroy(dst_buffer);
+    mgStreamDestroy(stream);
+    mgDeviceDestroy(device);
+    mgErrorDestroy(error);
     return rc;
 }

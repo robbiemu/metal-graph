@@ -25,7 +25,7 @@ v1 uses caller-side synchronization.
 - `mg_event_t` is shareable, but callers synchronize host-side event use unless an API says otherwise.
 - Destruction is caller-synchronized.
 
-A graph must not be mutated while `mg_graph_instantiate()` is running. Launching the same `mg_graph_exec_t` concurrently from multiple threads or streams is invalid in v1. Destroying a graph exec or stream while a launch using it is in flight is invalid in v1.
+A graph must not be mutated while `mgGraphInstantiate()` is running. Launching the same `mg_graph_exec_t` concurrently from multiple threads or streams is invalid in v1. Destroying a graph exec or stream while a launch using it is in flight is invalid in v1.
 
 Future versions may allow concurrent launches of the same immutable exec using independent per-launch state.
 

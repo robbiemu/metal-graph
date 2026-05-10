@@ -121,7 +121,7 @@ void mg_node_clear(mg_node_t *node) {
     }
 }
 
-mg_status_t mg_graph_create(mg_graph_t **out_graph, mg_error_t **out_error) {
+mg_status_t mgGraphCreate(mg_graph_t **out_graph, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!out_graph) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
@@ -138,7 +138,7 @@ mg_status_t mg_graph_create(mg_graph_t **out_graph, mg_error_t **out_error) {
     return MG_STATUS_OK;
 }
 
-void mg_graph_destroy(mg_graph_t *graph) {
+void mgGraphDestroy(mg_graph_t *graph) {
     if (!graph) {
         return;
     }
@@ -156,8 +156,8 @@ void mg_graph_destroy(mg_graph_t *graph) {
     free(graph);
 }
 
-mg_status_t mg_graph_add_dispatch_node(mg_graph_t *graph, const mg_dispatch_desc_t *desc,
-                                       mg_node_t **out_node, mg_error_t **out_error) {
+mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *desc,
+                                   mg_node_t **out_node, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (out_node) {
         *out_node = NULL;
@@ -231,8 +231,8 @@ mg_status_t mg_graph_add_dispatch_node(mg_graph_t *graph, const mg_dispatch_desc
     return MG_STATUS_OK;
 }
 
-mg_status_t mg_graph_add_copy_node(mg_graph_t *graph, const mg_copy_desc_t *desc,
-                                   mg_node_t **out_node, mg_error_t **out_error) {
+mg_status_t mgGraphAddCopyNode(mg_graph_t *graph, const mg_copy_desc_t *desc, mg_node_t **out_node,
+                               mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (out_node) {
         *out_node = NULL;
@@ -266,13 +266,8 @@ mg_status_t mg_graph_add_copy_node(mg_graph_t *graph, const mg_copy_desc_t *desc
     return MG_STATUS_OK;
 }
 
-mg_status_t mgGraphAddCopyNode(mg_graph_t *graph, const mg_copy_desc_t *desc, mg_node_t **out_node,
+mg_status_t mgGraphAddFillNode(mg_graph_t *graph, const mg_fill_desc_t *desc, mg_node_t **out_node,
                                mg_error_t **out_error) {
-    return mg_graph_add_copy_node(graph, desc, out_node, out_error);
-}
-
-mg_status_t mg_graph_add_fill_node(mg_graph_t *graph, const mg_fill_desc_t *desc,
-                                   mg_node_t **out_node, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (out_node) {
         *out_node = NULL;
@@ -303,11 +298,6 @@ mg_status_t mg_graph_add_fill_node(mg_graph_t *graph, const mg_fill_desc_t *desc
     return MG_STATUS_OK;
 }
 
-mg_status_t mgGraphAddFillNode(mg_graph_t *graph, const mg_fill_desc_t *desc, mg_node_t **out_node,
-                               mg_error_t **out_error) {
-    return mg_graph_add_fill_node(graph, desc, out_node, out_error);
-}
-
 static mg_status_t mg_graph_add_event_node(mg_graph_t *graph, mg_node_kind_t kind,
                                            mg_event_t *event, uint64_t value, mg_node_t **out_node,
                                            mg_error_t **out_error) {
@@ -334,28 +324,17 @@ static mg_status_t mg_graph_add_event_node(mg_graph_t *graph, mg_node_kind_t kin
     return MG_STATUS_OK;
 }
 
-mg_status_t mg_graph_add_event_wait_node(mg_graph_t *graph, mg_event_t *event, uint64_t value,
-                                         mg_node_t **out_node, mg_error_t **out_error) {
-    return mg_graph_add_event_node(graph, MG_NODE_EVENT_WAIT, event, value, out_node, out_error);
-}
-
 mg_status_t mgGraphAddEventWaitNode(mg_graph_t *graph, mg_event_t *event, uint64_t value,
                                     mg_node_t **out_node, mg_error_t **out_error) {
-    return mg_graph_add_event_wait_node(graph, event, value, out_node, out_error);
-}
-
-mg_status_t mg_graph_add_event_signal_node(mg_graph_t *graph, mg_event_t *event, uint64_t value,
-                                           mg_node_t **out_node, mg_error_t **out_error) {
-    return mg_graph_add_event_node(graph, MG_NODE_EVENT_SIGNAL, event, value, out_node, out_error);
+    return mg_graph_add_event_node(graph, MG_NODE_EVENT_WAIT, event, value, out_node, out_error);
 }
 
 mg_status_t mgGraphAddEventSignalNode(mg_graph_t *graph, mg_event_t *event, uint64_t value,
                                       mg_node_t **out_node, mg_error_t **out_error) {
-    return mg_graph_add_event_signal_node(graph, event, value, out_node, out_error);
+    return mg_graph_add_event_node(graph, MG_NODE_EVENT_SIGNAL, event, value, out_node, out_error);
 }
 
-mg_status_t mg_graph_add_barrier_node(mg_graph_t *graph, mg_node_t **out_node,
-                                      mg_error_t **out_error) {
+mg_status_t mgGraphAddBarrierNode(mg_graph_t *graph, mg_node_t **out_node, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (out_node) {
         *out_node = NULL;
@@ -376,14 +355,10 @@ mg_status_t mg_graph_add_barrier_node(mg_graph_t *graph, mg_node_t **out_node,
     return MG_STATUS_OK;
 }
 
-mg_status_t mgGraphAddBarrierNode(mg_graph_t *graph, mg_node_t **out_node, mg_error_t **out_error) {
-    return mg_graph_add_barrier_node(graph, out_node, out_error);
-}
+mg_node_id_t mgNodeId(const mg_node_t *node) { return node ? node->id : MG_NODE_ID_INVALID; }
 
-mg_node_id_t mg_node_id(const mg_node_t *node) { return node ? node->id : MG_NODE_ID_INVALID; }
-
-mg_status_t mg_graph_add_dependency(mg_graph_t *graph, mg_node_t *before, mg_node_t *after,
-                                    mg_error_t **out_error) {
+mg_status_t mgGraphAddDependency(mg_graph_t *graph, mg_node_t *before, mg_node_t *after,
+                                 mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!graph || !before || !after || before->graph != graph || after->graph != graph) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
@@ -479,7 +454,7 @@ mg_status_t mg_graph_topological_order(const mg_graph_t *graph, size_t *order,
     return MG_STATUS_OK;
 }
 
-mg_status_t mg_graph_validate(const mg_graph_t *graph, mg_error_t **out_error) {
+mg_status_t mgGraphValidate(const mg_graph_t *graph, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!graph) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_VALIDATE,

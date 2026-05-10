@@ -22,11 +22,11 @@ void mg_buffer_release(mg_buffer_t *buffer) {
     free(buffer);
 }
 
-void mg_buffer_destroy(mg_buffer_t *buffer) { mg_buffer_release(buffer); }
+void mgBufferDestroy(mg_buffer_t *buffer) { mg_buffer_release(buffer); }
 
-size_t mg_buffer_length(const mg_buffer_t *buffer) { return buffer ? buffer->length : 0; }
+size_t mgBufferLength(const mg_buffer_t *buffer) { return buffer ? buffer->length : 0; }
 
-void *mg_buffer_contents(mg_buffer_t *buffer) { return mg_backend_buffer_contents(buffer); }
+void *mgBufferContents(mg_buffer_t *buffer) { return mg_backend_buffer_contents(buffer); }
 
 void mg_event_retain(mg_event_t *event) {
     if (event) {
@@ -48,10 +48,4 @@ void mg_event_release(mg_event_t *event) {
     free(event);
 }
 
-void mg_event_destroy(mg_event_t *event) { mg_event_release(event); }
-
-mg_status_t mgEventCreate(mg_device_t *device, mg_event_t **out_event, mg_error_t **out_error) {
-    return mg_event_create(device, out_event, out_error);
-}
-
-void mgEventDestroy(mg_event_t *event) { mg_event_destroy(event); }
+void mgEventDestroy(mg_event_t *event) { mg_event_release(event); }
