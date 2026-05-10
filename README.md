@@ -10,6 +10,10 @@ Graph -> GraphExec -> Launch
 
 Applications build a logical graph, instantiate it into a reusable execution plan, patch compatible runtime parameters, and launch that plan repeatedly on a Metal-backed stream.
 
+<div align="center">
+<img width="50%" alt="metalgraph" src="https://github.com/user-attachments/assets/417217a6-048b-4907-ba96-dead3d069642" />
+</div>
+
 ## Current Status
 
 This repository is in project setup. The code here is intentionally small and centered on a stable C ABI foundation that Objective-C, Swift, Python, and Rust can build on later.
