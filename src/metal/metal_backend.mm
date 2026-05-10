@@ -68,6 +68,15 @@ static mg_status_t mg_clone_dispatch(const mg_node_t *node, mg_exec_dispatch_t *
             };
         }
     }
+    if (node->as.dispatch.resource_count > 0) {
+        size_t bytes = sizeof(*out_dispatch->resources) * node->as.dispatch.resource_count;
+        out_dispatch->resources = (mg_dispatch_resource_desc_t *)malloc(bytes);
+        if (!out_dispatch->resources) {
+            return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
+        }
+        memcpy(out_dispatch->resources, node->as.dispatch.resources, bytes);
+        out_dispatch->resource_count = node->as.dispatch.resource_count;
+    }
 
     return MG_STATUS_OK;
 }
@@ -93,6 +102,7 @@ static void mg_exec_dispatch_clear(mg_exec_dispatch_t *dispatch) {
     free(dispatch->kernel_name);
     free(dispatch->buffers);
     free(dispatch->scalars);
+    free(dispatch->resources);
     memset(dispatch, 0, sizeof(*dispatch));
 }
 
@@ -227,6 +237,123 @@ static void mg_workspace_backend_destroy(mg_workspace_plan_t *workspace) {
     workspace->backend_impl = NULL;
 }
 
+static void mg_icb_backend_destroy(mg_icb_plan_t *icb) {
+    if (!icb || !icb->backend_impl) {
+        return;
+    }
+    id icbObject = (__bridge_transfer id)icb->backend_impl;
+    (void)icbObject;
+    icb->backend_impl = NULL;
+}
+
+static mg_icb_fallback_reason_t mg_icb_dispatch_eligible(const mg_exec_dispatch_t *dispatch) {
+    if (!dispatch) {
+        return MG_ICB_FALLBACK_INELIGIBLE_NODE;
+    }
+    if (dispatch->patch_flags != 0 || dispatch->scalar_count != 0) {
+        return MG_ICB_FALLBACK_PATCHABLE_FIELD;
+    }
+    for (uint32_t i = 0; i < dispatch->buffer_count; ++i) {
+        const mg_dispatch_resource_desc_t *resource = mg_dispatch_find_resource(
+            dispatch->resources, dispatch->resource_count, dispatch->buffers[i].index);
+        if (!resource || resource->byte_count == 0 ||
+            resource->access == MG_RESOURCE_ACCESS_UNKNOWN) {
+            return MG_ICB_FALLBACK_UNKNOWN_RESOURCE_ACCESS;
+        }
+    }
+    return MG_ICB_FALLBACK_NONE;
+}
+
+static mg_status_t mg_icb_plan_build(mg_graph_exec_t *exec, id<MTLDevice> metalDevice) {
+    exec->icb.enabled_flags = MG_OPTIMIZATION_ICB;
+    SEL icbSelector = @selector(newIndirectCommandBufferWithDescriptor:maxCommandCount:options:);
+    exec->icb.available = [metalDevice respondsToSelector:icbSelector] ? 1u : 0u;
+
+    if (exec->node_count == 0) {
+        return MG_STATUS_OK;
+    }
+    exec->icb.groups_planned = 1;
+
+    if (exec->node_count != 1) {
+        exec->icb.groups_fallback = 1;
+        exec->icb.last_fallback_reason = MG_ICB_FALLBACK_INELIGIBLE_NODE;
+        return MG_STATUS_OK;
+    }
+
+    if (!exec->icb.available) {
+        exec->icb.groups_fallback = 1;
+        exec->icb.last_fallback_reason = MG_ICB_FALLBACK_UNSUPPORTED;
+        return MG_STATUS_OK;
+    }
+
+    NSUInteger maxKernelBufferBindCount = 0;
+    for (size_t i = 0; i < exec->node_count; ++i) {
+        if (exec->nodes[i].kind != MG_NODE_DISPATCH) {
+            exec->icb.groups_fallback = 1;
+            exec->icb.last_fallback_reason = MG_ICB_FALLBACK_INELIGIBLE_NODE;
+            return MG_STATUS_OK;
+        }
+        mg_exec_dispatch_t *dispatch = &exec->nodes[i].as.dispatch;
+        mg_icb_fallback_reason_t reason = mg_icb_dispatch_eligible(dispatch);
+        if (reason != MG_ICB_FALLBACK_NONE) {
+            exec->icb.groups_fallback = 1;
+            exec->icb.last_fallback_reason = reason;
+            return MG_STATUS_OK;
+        }
+        for (uint32_t j = 0; j < dispatch->buffer_count; ++j) {
+            NSUInteger candidate = (NSUInteger)dispatch->buffers[j].index + 1u;
+            if (candidate > maxKernelBufferBindCount) {
+                maxKernelBufferBindCount = candidate;
+            }
+        }
+    }
+
+    MTLIndirectCommandBufferDescriptor *descriptor = [MTLIndirectCommandBufferDescriptor new];
+    descriptor.commandTypes = MTLIndirectCommandTypeConcurrentDispatchThreads;
+    descriptor.inheritPipelineState = NO;
+    descriptor.inheritBuffers = NO;
+    descriptor.maxKernelBufferBindCount = maxKernelBufferBindCount;
+
+    id<MTLIndirectCommandBuffer> icb =
+        [metalDevice newIndirectCommandBufferWithDescriptor:descriptor
+                                            maxCommandCount:(NSUInteger)exec->node_count
+                                                    options:0];
+    if (!icb) {
+        exec->icb.groups_fallback = 1;
+        exec->icb.last_fallback_reason = MG_ICB_FALLBACK_BACKEND_ERROR;
+        return MG_STATUS_OK;
+    }
+
+    for (size_t i = 0; i < exec->node_count; ++i) {
+        mg_exec_dispatch_t *dispatch = &exec->nodes[i].as.dispatch;
+        id<MTLIndirectComputeCommand> command = [icb indirectComputeCommandAtIndex:(NSUInteger)i];
+        [command reset];
+        id<MTLComputePipelineState> pipeline =
+            (__bridge id<MTLComputePipelineState>)dispatch->pipeline_impl;
+        [command setComputePipelineState:pipeline];
+        for (uint32_t j = 0; j < dispatch->buffer_count; ++j) {
+            mg_buffer_t *buffer = dispatch->buffers[j].buffer;
+            id<MTLBuffer> metalBuffer = (__bridge id<MTLBuffer>)buffer->impl;
+            [command setKernelBuffer:metalBuffer
+                              offset:dispatch->buffers[j].offset
+                             atIndex:dispatch->buffers[j].index];
+        }
+
+        MTLSize grid =
+            MTLSizeMake(dispatch->grid_size[0], dispatch->grid_size[1], dispatch->grid_size[2]);
+        MTLSize threads =
+            MTLSizeMake(dispatch->threads_per_threadgroup[0], dispatch->threads_per_threadgroup[1],
+                        dispatch->threads_per_threadgroup[2]);
+        [command concurrentDispatchThreads:grid threadsPerThreadgroup:threads];
+    }
+
+    exec->icb.backend_impl = (__bridge_retained void *)icb;
+    exec->icb.command_count = exec->node_count;
+    exec->icb.groups_fallback = 0;
+    exec->icb.last_fallback_reason = MG_ICB_FALLBACK_NONE;
+    return MG_STATUS_OK;
+}
+
 mg_status_t mgDeviceCreateSystemDefault(mg_device_t **out_device, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!out_device) {
@@ -339,6 +466,7 @@ mg_status_t mgBufferCreateShared(mg_device_t *device, size_t length, mg_buffer_t
     }
 
     buffer->impl = (__bridge_retained void *)metalBuffer;
+    buffer->device_impl = (__bridge void *)metalDevice;
     buffer->length = length;
     buffer->ref_count = 1;
     *out_buffer = buffer;
@@ -502,9 +630,17 @@ mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_
             return errorStatus;
         }
 
+        MTLComputePipelineDescriptor *pipelineDescriptor = [MTLComputePipelineDescriptor new];
+        pipelineDescriptor.computeFunction = function;
+        if ([pipelineDescriptor respondsToSelector:@selector(setSupportIndirectCommandBuffers:)]) {
+            pipelineDescriptor.supportIndirectCommandBuffers = YES;
+        }
         NSError *pipelineError = nil;
         id<MTLComputePipelineState> pipeline =
-            [metalDevice newComputePipelineStateWithFunction:function error:&pipelineError];
+            [metalDevice newComputePipelineStateWithDescriptor:pipelineDescriptor
+                                                       options:0
+                                                    reflection:nil
+                                                         error:&pipelineError];
         if (!pipeline) {
             free(order);
             mg_status_t errorStatus = mg_set_error(
@@ -515,6 +651,13 @@ mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_
         }
 
         dispatch->pipeline_impl = (__bridge_retained void *)pipeline;
+    }
+
+    status = mg_icb_plan_build(exec, metalDevice);
+    if (status != MG_STATUS_OK) {
+        free(order);
+        mgGraphExecDestroy(exec);
+        return status;
     }
 
     free(order);
@@ -533,6 +676,7 @@ void mg_backend_graph_exec_destroy(mg_graph_exec_t *exec) {
 
     mg_workspace_backend_destroy(&exec->workspace);
     mg_workspace_plan_clear(&exec->workspace);
+    mg_icb_backend_destroy(&exec->icb);
 
     if (exec->device_impl) {
         id deviceObject = (__bridge_transfer id)exec->device_impl;
@@ -619,6 +763,51 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
     if (exec->workspace.backend_impl) {
         id workspace = (__bridge id)exec->workspace.backend_impl;
         launch->retained_workspace_impl = (__bridge_retained void *)workspace;
+    }
+
+    bool useICB = exec->icb.backend_impl && (exec->icb.enabled_flags & MG_OPTIMIZATION_ICB);
+    if (exec->icb.groups_planned > 0) {
+        exec->icb.groups_used = 0;
+        exec->icb.groups_fallback = 0;
+        if (!(exec->icb.enabled_flags & MG_OPTIMIZATION_ICB)) {
+            exec->icb.groups_fallback = exec->icb.groups_planned;
+            exec->icb.last_fallback_reason = MG_ICB_FALLBACK_DISABLED;
+        } else if (!exec->icb.backend_impl) {
+            exec->icb.groups_fallback = exec->icb.groups_planned;
+            if (exec->icb.last_fallback_reason == MG_ICB_FALLBACK_NONE) {
+                exec->icb.last_fallback_reason = MG_ICB_FALLBACK_UNSUPPORTED;
+            }
+        }
+    }
+
+    if (useICB) {
+        id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+        if (!encoder) {
+            mgLaunchDestroy(launch);
+            return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE,
+                                MG_NODE_ID_INVALID, "failed to create Metal ICB compute encoder",
+                                NULL);
+        }
+        id<MTLIndirectCommandBuffer> icb =
+            (__bridge id<MTLIndirectCommandBuffer>)exec->icb.backend_impl;
+        [encoder executeCommandsInBuffer:icb withRange:NSMakeRange(0, exec->icb.command_count)];
+        [encoder endEncoding];
+        for (size_t i = 0; i < exec->node_count; ++i) {
+            mg_exec_dispatch_t *dispatch = &exec->nodes[i].as.dispatch;
+            for (uint32_t j = 0; j < dispatch->buffer_count; ++j) {
+                mg_buffer_t *buffer = dispatch->buffers[j].buffer;
+                mg_buffer_retain(buffer);
+                launch->retained_buffers[launch->retained_buffer_count++] = buffer;
+            }
+        }
+        exec->icb.groups_used = exec->icb.groups_planned;
+        exec->icb.groups_fallback = 0;
+        exec->icb.last_fallback_reason = MG_ICB_FALLBACK_NONE;
+        [commandBuffer commit];
+        exec->in_flight_count++;
+        launch->exec = exec;
+        *out_launch = launch;
+        return MG_STATUS_OK;
     }
 
     for (size_t i = 0; i < exec->node_count; ++i) {

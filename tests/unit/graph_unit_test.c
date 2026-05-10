@@ -233,19 +233,131 @@ int main(void) {
     uint32_t scalar_storage = scalar_value;
     mg_buffer_t dispatch_buffer = {
         NULL,
+        NULL,
         16,
         1,
     };
     mg_buffer_t tiny_buffer = {
+        NULL,
         NULL,
         4,
         1,
     };
     mg_buffer_t copy_dst = {
         NULL,
+        NULL,
         16,
         1,
     };
+    mg_dispatch_desc_t resource_desc = test_dispatch_desc();
+    mg_buffer_binding_t resource_binding = {
+        0,
+        &dispatch_buffer,
+        0,
+    };
+    resource_desc.buffers = &resource_binding;
+    resource_desc.buffer_count = 1;
+    mg_dispatch_resource_desc_t resource = {
+        sizeof(mg_dispatch_resource_desc_t), 0, MG_RESOURCE_ACCESS_READ_WRITE, 0, 8, 4,
+    };
+    resource_desc.resources = &resource;
+    resource_desc.resource_count = 1;
+    mg_node_t *resource_node = NULL;
+    if (expect_status(mgGraphAddDispatchNode(graph, &resource_desc, &resource_node, &error),
+                      MG_STATUS_OK, "add dispatch with resource requirement") ||
+        expect_status(
+            mgGraphSetNodePatchFlags(graph, resource_node, MG_PATCH_DISPATCH_BUFFER, &error),
+            MG_STATUS_OK, "allow patchable dispatch with resource requirement")) {
+        mgGraphDestroy(graph);
+        return 19;
+    }
+
+    mg_buffer_binding_t duplicate_bindings[2] = {
+        resource_binding,
+        resource_binding,
+    };
+    resource_desc.buffers = duplicate_bindings;
+    resource_desc.buffer_count = 2;
+    resource_desc.resources = NULL;
+    resource_desc.resource_count = 0;
+    if (expect_status(mgGraphAddDispatchNode(graph, &resource_desc, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject duplicate dispatch buffer bindings")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 20;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    resource_desc.buffers = &resource_binding;
+    resource_desc.buffer_count = 1;
+    mg_dispatch_resource_desc_t duplicate_resources[2] = {resource, resource};
+    resource_desc.resources = duplicate_resources;
+    resource_desc.resource_count = 2;
+    if (expect_status(mgGraphAddDispatchNode(graph, &resource_desc, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject duplicate dispatch resources")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 20;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    resource_desc.resources = &resource;
+    resource_desc.resource_count = 1;
+    mg_dispatch_resource_desc_t missing_resource = resource;
+    missing_resource.index = 7;
+    resource_desc.resources = &missing_resource;
+    if (expect_status(mgGraphAddDispatchNode(graph, &resource_desc, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject resource for missing binding")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 21;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    mg_dispatch_resource_desc_t too_large_resource = resource;
+    too_large_resource.byte_count = 32;
+    resource_desc.resources = &too_large_resource;
+    if (expect_status(mgGraphAddDispatchNode(graph, &resource_desc, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject resource outside initial buffer")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 22;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    mg_dispatch_resource_desc_t overflow_resource = resource;
+    overflow_resource.byte_offset = SIZE_MAX;
+    overflow_resource.byte_count = 1;
+    resource_desc.resources = &overflow_resource;
+    if (expect_status(mgGraphAddDispatchNode(graph, &resource_desc, &invalid, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject dispatch resource range overflow")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 22;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
+    resource_desc.resources = NULL;
+    resource_desc.resource_count = 0;
+    mg_node_t *no_resource_node = NULL;
+    if (expect_status(mgGraphAddDispatchNode(graph, &resource_desc, &no_resource_node, &error),
+                      MG_STATUS_OK, "add dispatch without resource requirement") ||
+        expect_status(
+            mgGraphSetNodePatchFlags(graph, no_resource_node, MG_PATCH_DISPATCH_BUFFER, &error),
+            MG_STATUS_INVALID_ARGUMENT,
+            "reject patchable dispatch buffer without resource requirement")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(graph);
+        return 23;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+
     mg_exec_node_t patch_nodes[5];
     memset(patch_nodes, 0, sizeof(patch_nodes));
     patch_nodes[0].kind = MG_NODE_DISPATCH;
@@ -271,6 +383,11 @@ int main(void) {
     };
     patch_nodes[0].as.dispatch.buffers = &buffer_binding;
     patch_nodes[0].as.dispatch.buffer_count = 1;
+    mg_dispatch_resource_desc_t exec_resource = {
+        sizeof(mg_dispatch_resource_desc_t), 0, MG_RESOURCE_ACCESS_READ_WRITE, 0, 8, 4,
+    };
+    patch_nodes[0].as.dispatch.resources = &exec_resource;
+    patch_nodes[0].as.dispatch.resource_count = 1;
     patch_nodes[1].kind = MG_NODE_COPY;
     patch_nodes[1].as.copy.id = 101;
     patch_nodes[1].as.copy.patch_flags = MG_PATCH_COPY_RANGE;
@@ -353,6 +470,12 @@ int main(void) {
     }
     mgErrorDestroy(error);
     error = NULL;
+    if (expect_status(
+            mgGraphExecPatchDispatchBuffer(&patch_exec, 100, 0, &dispatch_buffer, 4, &error),
+            MG_STATUS_OK, "accept range-compatible dispatch buffer patch")) {
+        mgGraphDestroy(graph);
+        return 22;
+    }
 
     mg_copy_desc_t bad_copy_patch;
     memset(&bad_copy_patch, 0, sizeof(bad_copy_patch));

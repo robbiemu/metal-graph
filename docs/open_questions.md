@@ -4,26 +4,7 @@ This file tracks unresolved design questions first, then records resolved decisi
 
 ## Current Open Questions
 
-### Dispatch Buffer Patch Range Compatibility
-
-Affected area: Phase 3 patch/update semantics and the public dispatch buffer binding ABI.
-
-Current Phase 3 behavior validates that a dispatch buffer patch uses an existing binding index, a
-non-null replacement buffer, and an offset within that buffer. It does not validate a declared
-shader-visible byte range because `mg_buffer_binding_t` currently has no `byte_count`,
-`required_length`, or resource requirement field.
-
-Decision needed: should dispatch buffer bindings declare the required byte range so compatible
-patches can prove that replacement buffers are large enough for the shader-visible access pattern?
-
-Options under consideration:
-
-- add a `byte_count` or `required_length` field to `mg_buffer_binding_t`;
-- add a separate dispatch resource requirement descriptor, keeping bindings as buffer+offset only;
-- leave byte-range validation to higher-level bindings, examples, or future shader metadata.
-
-Next action: resolve before treating Phase 3 patch ABI as stable. This is not a Phase 4 ICB
-optimization question.
+There are no currently tracked open questions for Phase 0 through Phase 4.
 
 When new questions arise, add them here with:
 
@@ -96,3 +77,71 @@ Python is the first real high-level consumer because the motivating use case is 
 MLX integration should be an adapter above the Python binding, not the runtime substrate. The first Python milestone should work with library-owned buffers before attempting MLX array interop.
 
 Swift remains useful as an Apple-platform smoke test and ergonomic check, but it is not the primary v1 binding target. Rust is deferred until the C ABI and ownership model are more stable.
+
+### Dispatch Buffer Patch Range Compatibility
+
+Phase 3 introduced default exec patching for dispatch buffer bindings. During review, we confirmed
+that the current patch validation could verify the binding index, replacement buffer, device
+compatibility, and offset shape, but it could not fully prove the shader-visible byte range for a
+patched dispatch buffer.
+
+The important design lesson is that a dispatch buffer binding and a dispatch resource contract are
+related but distinct concepts.
+
+A binding answers:
+
+```text
+Which buffer is bound at this slot, and at what offset?
+```
+
+A resource contract answers:
+
+```text
+What range and access pattern is this node allowed to use through that binding?
+```
+
+Keeping those concepts separate is the cleaner long-term model. `mg_buffer_binding_t` remains a
+lightweight concrete binding record. It does not grow into the full resource-usage declaration for
+dispatch nodes.
+
+Phase 4 adds separate dispatch resource requirement metadata keyed by binding index. That metadata
+describes the declared shader-visible range, access mode, and compatibility constraints needed for
+validation, hazard reasoning, memory planning, and future backend optimizations.
+
+Dispatch buffer binding indices are unique within a dispatch node. Because dispatch resource
+contracts are keyed by binding index, allowing duplicate bindings would make the resource contract
+ambiguous and could cause patch validation and backend encoding to reason about different effective
+bindings. `mgGraphAddDispatchNode` rejects duplicate binding indices.
+
+A dispatch resource descriptor must refer to exactly one existing binding index. Duplicate dispatch
+resource descriptors for the same binding index are invalid.
+
+This decision keeps Phase 3 valid while acknowledging a deliberate limitation: Phase 3 dispatch
+buffer patch compatibility was not range-complete. Phase 4 resolves that limitation for dispatch
+nodes that declare resource requirements.
+
+Decision:
+
+- `mg_buffer_binding_t` remains the concrete buffer-plus-offset binding record.
+- Dispatch resource requirements are modeled separately.
+- Dispatch buffer patch validation uses those requirements to prove replacement-buffer range
+  compatibility.
+- If a dispatch buffer binding is patchable, it must have a declared nonzero resource range.
+
+### Phase 4 ICB Scope
+
+The first ICB implementation is intentionally narrower than general "dispatch-only graph"
+eligibility. A dispatch-only graph can still contain dependencies and resource hazards between
+dispatches. Without dependency-aware ICB grouping and explicit hazard handling, treating multiple
+dispatches as one ICB-eligible group is too broad.
+
+Phase 4 therefore supports only one static dispatch node in the ICB path. Multi-dispatch execs fall
+back to direct encoding until the planner can prove that indirect command execution preserves
+direct-encoding semantics.
+
+Future work:
+
+- dependency-aware ICB grouping;
+- resource-hazard-aware multi-dispatch ICB eligibility;
+- per-group diagnostics instead of last/global fallback reason;
+- broader dispatch resource contracts for hazard analysis.

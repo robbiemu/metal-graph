@@ -36,6 +36,13 @@ static mg_dispatch_desc_t add_one_desc(mg_buffer_t *buffer) {
     binding.index = 0;
     binding.buffer = buffer;
     binding.offset = 0;
+    static mg_dispatch_resource_desc_t resource;
+    memset(&resource, 0, sizeof(resource));
+    resource.size = sizeof(resource);
+    resource.index = 0;
+    resource.access = MG_RESOURCE_ACCESS_READ_WRITE;
+    resource.byte_count = sizeof(uint32_t) * 4;
+    resource.alignment = sizeof(uint32_t);
 
     mg_dispatch_desc_t desc;
     memset(&desc, 0, sizeof(desc));
@@ -50,6 +57,8 @@ static mg_dispatch_desc_t add_one_desc(mg_buffer_t *buffer) {
     desc.threads_per_threadgroup[2] = 1;
     desc.buffers = &binding;
     desc.buffer_count = 1;
+    desc.resources = &resource;
+    desc.resource_count = 1;
     return desc;
 }
 
@@ -93,6 +102,7 @@ int main(void) {
     mg_buffer_t *src_buffer = NULL;
     mg_buffer_t *fill_buffer = NULL;
     mg_buffer_t *workspace_buffer = NULL;
+    mg_buffer_t *icb_buffer = NULL;
     mg_event_t *event = NULL;
     mg_arena_t *arena = NULL;
     mg_graph_t *graph = NULL;
@@ -464,8 +474,163 @@ int main(void) {
         check_fill(workspace_values, 0xCD, "phase2 relaunch workspace fill")) {
         goto cleanup;
     }
+    mg_graph_exec_diagnostics_t mixed_diagnostics;
+    memset(&mixed_diagnostics, 0, sizeof(mixed_diagnostics));
+    mixed_diagnostics.size = sizeof(mixed_diagnostics);
+    if (expect_status(mgGraphExecGetDiagnostics(exec, &mixed_diagnostics, &error), MG_STATUS_OK,
+                      "get mixed graph diagnostics", &error) ||
+        mixed_diagnostics.icb_groups_planned != 1 || mixed_diagnostics.icb_groups_fallback != 1 ||
+        mixed_diagnostics.icb_last_fallback_reason != MG_ICB_FALLBACK_INELIGIBLE_NODE) {
+        fprintf(stderr, "mixed graph should conservatively fall back from ICB\n");
+        goto cleanup;
+    }
     mgGraphExecDestroy(exec);
     exec = NULL;
+
+    if (expect_status(mgBufferCreateShared(device, sizeof(uint32_t) * 4, &icb_buffer, &error),
+                      MG_STATUS_OK, "create phase4 icb buffer", &error)) {
+        goto cleanup;
+    }
+    uint32_t *icb_values = (uint32_t *)mgBufferContents(icb_buffer);
+    if (!icb_values) {
+        fprintf(stderr, "phase4 ICB buffer contents are unavailable\n");
+        goto cleanup;
+    }
+    icb_values[0] = 10;
+    icb_values[1] = 20;
+    icb_values[2] = 30;
+    icb_values[3] = 40;
+
+    mg_graph_t *icb_graph = NULL;
+    mg_node_t *icb_node = NULL;
+    mg_dispatch_desc_t icb_desc = add_one_desc(icb_buffer);
+    if (expect_status(mgGraphCreate(&icb_graph, &error), MG_STATUS_OK, "create phase4 icb graph",
+                      &error) ||
+        expect_status(mgGraphAddDispatchNode(icb_graph, &icb_desc, &icb_node, &error), MG_STATUS_OK,
+                      "add phase4 icb dispatch", &error) ||
+        expect_status(mgGraphInstantiate(icb_graph, device, &exec, &error), MG_STATUS_OK,
+                      "instantiate phase4 icb graph", &error)) {
+        mgGraphDestroy(icb_graph);
+        goto cleanup;
+    }
+    mgGraphDestroy(icb_graph);
+
+    mg_graph_exec_diagnostics_t diagnostics;
+    memset(&diagnostics, 0, sizeof(diagnostics));
+    diagnostics.size = sizeof(diagnostics);
+    if (expect_status(mgGraphExecGetDiagnostics(exec, &diagnostics, &error), MG_STATUS_OK,
+                      "get phase4 initial diagnostics", &error)) {
+        goto cleanup;
+    }
+    if (diagnostics.icb_groups_planned != 1) {
+        fprintf(stderr, "phase4 ICB diagnostics should plan one eligible group\n");
+        goto cleanup;
+    }
+
+    if (expect_status(mgGraphExecSetOptimizationFlags(exec, 0, &error), MG_STATUS_OK,
+                      "disable phase4 icb", &error) ||
+        expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
+                      "launch phase4 direct fallback", &error) ||
+        expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK,
+                      "sync phase4 direct fallback", &error)) {
+        goto cleanup;
+    }
+    mgLaunchDestroy(launch);
+    launch = NULL;
+    memset(&diagnostics, 0, sizeof(diagnostics));
+    diagnostics.size = sizeof(diagnostics);
+    if (expect_status(mgGraphExecGetDiagnostics(exec, &diagnostics, &error), MG_STATUS_OK,
+                      "get phase4 disabled diagnostics", &error) ||
+        check_values(icb_values, 11, 21, 31, 41, "phase4 direct fallback") ||
+        diagnostics.icb_groups_fallback != 1 ||
+        diagnostics.icb_last_fallback_reason != MG_ICB_FALLBACK_DISABLED) {
+        fprintf(stderr, "phase4 direct fallback diagnostics are wrong\n");
+        goto cleanup;
+    }
+
+    if (expect_status(mgGraphExecSetOptimizationFlags(exec, MG_OPTIMIZATION_ICB, &error),
+                      MG_STATUS_OK, "enable phase4 icb", &error) ||
+        expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
+                      "launch phase4 icb or fallback", &error) ||
+        expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK,
+                      "sync phase4 icb or fallback", &error)) {
+        goto cleanup;
+    }
+    mgLaunchDestroy(launch);
+    launch = NULL;
+    memset(&diagnostics, 0, sizeof(diagnostics));
+    diagnostics.size = sizeof(diagnostics);
+    if (expect_status(mgGraphExecGetDiagnostics(exec, &diagnostics, &error), MG_STATUS_OK,
+                      "get phase4 enabled diagnostics", &error) ||
+        check_values(icb_values, 12, 22, 32, 42, "phase4 icb or fallback")) {
+        goto cleanup;
+    }
+    if (diagnostics.icb_groups_used == 0 && diagnostics.icb_groups_fallback == 0) {
+        fprintf(stderr, "phase4 diagnostics should report ICB use or fallback\n");
+        goto cleanup;
+    }
+    mgGraphExecDestroy(exec);
+    exec = NULL;
+
+    mg_graph_t *multi_dispatch_graph = NULL;
+    mg_node_t *multi_first = NULL;
+    mg_node_t *multi_second = NULL;
+    mg_dispatch_desc_t multi_desc = add_one_desc(icb_buffer);
+    if (expect_status(mgGraphCreate(&multi_dispatch_graph, &error), MG_STATUS_OK,
+                      "create phase4 multi-dispatch graph", &error) ||
+        expect_status(
+            mgGraphAddDispatchNode(multi_dispatch_graph, &multi_desc, &multi_first, &error),
+            MG_STATUS_OK, "add phase4 multi-dispatch first", &error) ||
+        expect_status(
+            mgGraphAddDispatchNode(multi_dispatch_graph, &multi_desc, &multi_second, &error),
+            MG_STATUS_OK, "add phase4 multi-dispatch second", &error) ||
+        expect_status(mgGraphInstantiate(multi_dispatch_graph, device, &exec, &error), MG_STATUS_OK,
+                      "instantiate phase4 multi-dispatch graph", &error)) {
+        mgGraphDestroy(multi_dispatch_graph);
+        goto cleanup;
+    }
+    mgGraphDestroy(multi_dispatch_graph);
+    memset(&diagnostics, 0, sizeof(diagnostics));
+    diagnostics.size = sizeof(diagnostics);
+    if (expect_status(mgGraphExecGetDiagnostics(exec, &diagnostics, &error), MG_STATUS_OK,
+                      "get phase4 multi-dispatch diagnostics", &error) ||
+        diagnostics.icb_groups_planned != 1 || diagnostics.icb_groups_fallback != 1 ||
+        diagnostics.icb_last_fallback_reason != MG_ICB_FALLBACK_INELIGIBLE_NODE) {
+        fprintf(stderr, "multi-dispatch exec should fall back until hazard analysis exists\n");
+        goto cleanup;
+    }
+    mgGraphExecDestroy(exec);
+    exec = NULL;
+
+    mg_graph_t *unknown_graph = NULL;
+    mg_node_t *unknown_node = NULL;
+    mg_dispatch_desc_t unknown_desc = add_one_desc(icb_buffer);
+    mg_dispatch_resource_desc_t unknown_resource = *unknown_desc.resources;
+    unknown_resource.access = MG_RESOURCE_ACCESS_UNKNOWN;
+    unknown_desc.resources = &unknown_resource;
+    if (expect_status(mgGraphCreate(&unknown_graph, &error), MG_STATUS_OK,
+                      "create phase4 unknown graph", &error) ||
+        expect_status(mgGraphAddDispatchNode(unknown_graph, &unknown_desc, &unknown_node, &error),
+                      MG_STATUS_OK, "add phase4 unknown dispatch", &error) ||
+        expect_status(mgGraphInstantiate(unknown_graph, device, &exec, &error), MG_STATUS_OK,
+                      "instantiate phase4 unknown graph", &error)) {
+        mgGraphDestroy(unknown_graph);
+        goto cleanup;
+    }
+    mgGraphDestroy(unknown_graph);
+    memset(&diagnostics, 0, sizeof(diagnostics));
+    diagnostics.size = sizeof(diagnostics);
+    if (expect_status(mgGraphExecGetDiagnostics(exec, &diagnostics, &error), MG_STATUS_OK,
+                      "get phase4 unknown diagnostics", &error) ||
+        diagnostics.icb_groups_planned != 1 || diagnostics.icb_groups_fallback != 1 ||
+        diagnostics.icb_last_fallback_reason != MG_ICB_FALLBACK_UNKNOWN_RESOURCE_ACCESS) {
+        fprintf(stderr, "unknown dispatch access should conservatively fall back from ICB\n");
+        goto cleanup;
+    }
+    mgGraphExecDestroy(exec);
+    exec = NULL;
+    mgBufferDestroy(icb_buffer);
+    icb_buffer = NULL;
 
     if (expect_status(mgBufferCreateShared(device, sizeof(uint32_t) * 8, &dst_buffer, &error),
                       MG_STATUS_OK, "create phase3 dispatch buffer", &error) ||
@@ -501,6 +666,13 @@ int main(void) {
         dst_buffer,
         0,
     };
+    mg_dispatch_resource_desc_t phase3_resource;
+    memset(&phase3_resource, 0, sizeof(phase3_resource));
+    phase3_resource.size = sizeof(phase3_resource);
+    phase3_resource.index = 0;
+    phase3_resource.access = MG_RESOURCE_ACCESS_READ_WRITE;
+    phase3_resource.byte_count = sizeof(uint32_t) * 4;
+    phase3_resource.alignment = sizeof(uint32_t);
     uint32_t delta = 1;
     mg_scalar_binding_t scalar = {
         1,
@@ -525,6 +697,8 @@ int main(void) {
     phase3_dispatch_desc.buffer_count = 1;
     phase3_dispatch_desc.scalars = &scalar;
     phase3_dispatch_desc.scalar_count = 1;
+    phase3_dispatch_desc.resources = &phase3_resource;
+    phase3_dispatch_desc.resource_count = 1;
 
     mg_copy_desc_t phase3_copy_desc;
     memset(&phase3_copy_desc, 0, sizeof(phase3_copy_desc));
@@ -640,6 +814,11 @@ int main(void) {
     patched_fill.dst_offset = 4;
     patched_fill.byte_count = 4;
     patched_fill.value = 0x22;
+    if (expect_status(
+            mgGraphExecPatchDispatchBuffer(exec, phase3_dispatch_id, 0, src_buffer, 0, &error),
+            MG_STATUS_INVALID_ARGUMENT, "reject too-small phase3 dispatch patch buffer", &error)) {
+        goto cleanup;
+    }
     memset(phase3_values, 0, sizeof(uint32_t) * 8);
     memset(phase3_bytes, 0, 8);
     if (expect_status(mgGraphExecPatchDispatchScalar(exec, phase3_dispatch_id, 1, &patched_delta,
@@ -703,6 +882,7 @@ cleanup:
     mgArenaDestroy(arena);
     mgEventDestroy(event);
     mgBufferDestroy(workspace_buffer);
+    mgBufferDestroy(icb_buffer);
     mgBufferDestroy(fill_buffer);
     mgBufferDestroy(src_buffer);
     mgBufferDestroy(dst_buffer);
