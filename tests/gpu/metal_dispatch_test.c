@@ -73,6 +73,17 @@ static int check_fill(const uint8_t *values, uint8_t expected, const char *label
     return 0;
 }
 
+static int check_bytes(const uint8_t *values, const uint8_t *expected, size_t count,
+                       const char *label) {
+    for (size_t i = 0; i < count; ++i) {
+        if (values[i] != expected[i]) {
+            fprintf(stderr, "%s: byte %zu expected %u got %u\n", label, i, expected[i], values[i]);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int main(void) {
     int rc = 1;
     mg_error_t *error = NULL;
@@ -451,6 +462,198 @@ int main(void) {
     if (check_values(dst_values, 8, 9, 10, 11, "phase1 relaunch") ||
         check_fill(fill_values, 0xAB, "phase1 relaunch fill") ||
         check_fill(workspace_values, 0xCD, "phase2 relaunch workspace fill")) {
+        goto cleanup;
+    }
+    mgGraphExecDestroy(exec);
+    exec = NULL;
+
+    if (expect_status(mgBufferCreateShared(device, sizeof(uint32_t) * 8, &dst_buffer, &error),
+                      MG_STATUS_OK, "create phase3 dispatch buffer", &error) ||
+        expect_status(mgBufferCreateShared(device, 8, &src_buffer, &error), MG_STATUS_OK,
+                      "create phase3 copy source", &error) ||
+        expect_status(mgBufferCreateShared(device, 8, &fill_buffer, &error), MG_STATUS_OK,
+                      "create phase3 fill/copy output", &error) ||
+        expect_status(mgEventCreate(device, &event, &error), MG_STATUS_OK, "create phase3 event",
+                      &error)) {
+        goto cleanup;
+    }
+
+    uint32_t *phase3_values = (uint32_t *)mgBufferContents(dst_buffer);
+    uint8_t *phase3_src = (uint8_t *)mgBufferContents(src_buffer);
+    uint8_t *phase3_bytes = (uint8_t *)mgBufferContents(fill_buffer);
+    if (!phase3_values || !phase3_src || !phase3_bytes) {
+        fprintf(stderr, "phase3 shared buffer contents are unavailable\n");
+        goto cleanup;
+    }
+    for (uint32_t i = 0; i < 8; ++i) {
+        phase3_values[i] = 0;
+        phase3_src[i] = (uint8_t)(i + 1);
+        phase3_bytes[i] = 0;
+    }
+
+    mg_graph_t *phase3_graph = NULL;
+    mg_node_t *phase3_dispatch = NULL;
+    mg_node_t *phase3_copy = NULL;
+    mg_node_t *phase3_fill = NULL;
+    mg_node_t *phase3_signal = NULL;
+    mg_buffer_binding_t phase3_binding = {
+        0,
+        dst_buffer,
+        0,
+    };
+    uint32_t delta = 1;
+    mg_scalar_binding_t scalar = {
+        1,
+        &delta,
+        sizeof(delta),
+    };
+    mg_dispatch_desc_t phase3_dispatch_desc;
+    memset(&phase3_dispatch_desc, 0, sizeof(phase3_dispatch_desc));
+    phase3_dispatch_desc.size = sizeof(phase3_dispatch_desc);
+    phase3_dispatch_desc.metallib_path = TEST_METALLIB_PATH;
+    phase3_dispatch_desc.kernel_name = "mg_phase3_add_scalar";
+    phase3_dispatch_desc.grid_size[0] = 2;
+    phase3_dispatch_desc.grid_size[1] = 1;
+    phase3_dispatch_desc.grid_size[2] = 1;
+    phase3_dispatch_desc.threads_per_threadgroup[0] = 1;
+    phase3_dispatch_desc.threads_per_threadgroup[1] = 1;
+    phase3_dispatch_desc.threads_per_threadgroup[2] = 1;
+    phase3_dispatch_desc.max_grid_size[0] = 4;
+    phase3_dispatch_desc.max_grid_size[1] = 1;
+    phase3_dispatch_desc.max_grid_size[2] = 1;
+    phase3_dispatch_desc.buffers = &phase3_binding;
+    phase3_dispatch_desc.buffer_count = 1;
+    phase3_dispatch_desc.scalars = &scalar;
+    phase3_dispatch_desc.scalar_count = 1;
+
+    mg_copy_desc_t phase3_copy_desc;
+    memset(&phase3_copy_desc, 0, sizeof(phase3_copy_desc));
+    phase3_copy_desc.size = sizeof(phase3_copy_desc);
+    phase3_copy_desc.src = src_buffer;
+    phase3_copy_desc.dst = fill_buffer;
+    phase3_copy_desc.byte_count = 4;
+    mg_fill_desc_t phase3_fill_desc;
+    memset(&phase3_fill_desc, 0, sizeof(phase3_fill_desc));
+    phase3_fill_desc.size = sizeof(phase3_fill_desc);
+    phase3_fill_desc.dst = fill_buffer;
+    phase3_fill_desc.dst_offset = 4;
+    phase3_fill_desc.byte_count = 4;
+    phase3_fill_desc.value = 0x11;
+
+    if (expect_status(mgGraphCreate(&phase3_graph, &error), MG_STATUS_OK, "create phase3 graph",
+                      &error) ||
+        expect_status(
+            mgGraphAddDispatchNode(phase3_graph, &phase3_dispatch_desc, &phase3_dispatch, &error),
+            MG_STATUS_OK, "add phase3 dispatch", &error) ||
+        expect_status(mgGraphSetNodePatchFlags(phase3_graph, phase3_dispatch,
+                                               MG_PATCH_DISPATCH_GRID | MG_PATCH_DISPATCH_BUFFER |
+                                                   MG_PATCH_DISPATCH_SCALAR,
+                                               &error),
+                      MG_STATUS_OK, "declare phase3 dispatch patch flags", &error) ||
+        expect_status(mgGraphAddCopyNode(phase3_graph, &phase3_copy_desc, &phase3_copy, &error),
+                      MG_STATUS_OK, "add phase3 copy", &error) ||
+        expect_status(mgGraphSetNodePatchFlags(phase3_graph, phase3_copy,
+                                               MG_PATCH_COPY_BUFFER | MG_PATCH_COPY_RANGE, &error),
+                      MG_STATUS_OK, "declare phase3 copy patch flags", &error) ||
+        expect_status(mgGraphAddFillNode(phase3_graph, &phase3_fill_desc, &phase3_fill, &error),
+                      MG_STATUS_OK, "add phase3 fill", &error) ||
+        expect_status(mgGraphSetNodePatchFlags(phase3_graph, phase3_fill,
+                                               MG_PATCH_FILL_RANGE | MG_PATCH_FILL_VALUE, &error),
+                      MG_STATUS_OK, "declare phase3 fill patch flags", &error) ||
+        expect_status(mgGraphAddEventSignalNode(phase3_graph, event, 1, &phase3_signal, &error),
+                      MG_STATUS_OK, "add phase3 signal", &error) ||
+        expect_status(
+            mgGraphSetNodePatchFlags(phase3_graph, phase3_signal, MG_PATCH_EVENT_VALUE, &error),
+            MG_STATUS_OK, "declare phase3 event patch flag", &error) ||
+        expect_status(mgGraphInstantiate(phase3_graph, device, &exec, &error), MG_STATUS_OK,
+                      "instantiate phase3 graph", &error)) {
+        mgGraphDestroy(phase3_graph);
+        goto cleanup;
+    }
+    mg_node_id_t phase3_dispatch_id = mgNodeId(phase3_dispatch);
+    mg_node_id_t phase3_copy_id = mgNodeId(phase3_copy);
+    mg_node_id_t phase3_fill_id = mgNodeId(phase3_fill);
+    mg_node_id_t phase3_signal_id = mgNodeId(phase3_signal);
+    mgGraphDestroy(phase3_graph);
+
+    if (expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
+                      "launch phase3 initial graph", &error) ||
+        expect_status(mgGraphExecPatchDispatchGrid(exec, phase3_dispatch_id,
+                                                   phase3_dispatch_desc.max_grid_size, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject in-flight phase3 patch", &error) ||
+        expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK, "sync phase3 initial",
+                      &error)) {
+        goto cleanup;
+    }
+    mgLaunchDestroy(launch);
+    launch = NULL;
+    uint8_t expected_initial_bytes[8] = {1, 2, 3, 4, 0x11, 0x11, 0x11, 0x11};
+    if (phase3_values[0] != 1 || phase3_values[1] != 1 || phase3_values[2] != 0 ||
+        phase3_values[3] != 0 ||
+        check_bytes(phase3_bytes, expected_initial_bytes, 8, "phase3 initial copy/fill")) {
+        fprintf(stderr, "phase3 initial dispatch output is wrong\n");
+        goto cleanup;
+    }
+
+    uint64_t wrong_delta = 9;
+    if (expect_status(mgGraphExecPatchDispatchScalar(exec, phase3_dispatch_id, 1, &wrong_delta,
+                                                     sizeof(wrong_delta), &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject phase3 wrong scalar size", &error)) {
+        goto cleanup;
+    }
+    memset(phase3_values, 0, sizeof(uint32_t) * 8);
+    memset(phase3_bytes, 0, 8);
+    if (expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
+                      "launch phase3 after failed patch", &error) ||
+        expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK,
+                      "sync phase3 after failed patch", &error)) {
+        goto cleanup;
+    }
+    mgLaunchDestroy(launch);
+    launch = NULL;
+    if (phase3_values[0] != 1 || phase3_values[1] != 1 || phase3_values[2] != 0 ||
+        phase3_values[3] != 0) {
+        fprintf(stderr, "phase3 failed patch should preserve scalar/grid state\n");
+        goto cleanup;
+    }
+
+    uint32_t patched_delta = 2;
+    uint32_t patched_grid[3] = {4, 1, 1};
+    mg_copy_desc_t patched_copy = phase3_copy_desc;
+    patched_copy.src_offset = 4;
+    patched_copy.dst_offset = 0;
+    patched_copy.byte_count = 4;
+    mg_fill_desc_t patched_fill = phase3_fill_desc;
+    patched_fill.dst_offset = 4;
+    patched_fill.byte_count = 4;
+    patched_fill.value = 0x22;
+    memset(phase3_values, 0, sizeof(uint32_t) * 8);
+    memset(phase3_bytes, 0, 8);
+    if (expect_status(mgGraphExecPatchDispatchScalar(exec, phase3_dispatch_id, 1, &patched_delta,
+                                                     sizeof(patched_delta), &error),
+                      MG_STATUS_OK, "patch phase3 scalar", &error) ||
+        expect_status(mgGraphExecPatchDispatchGrid(exec, phase3_dispatch_id, patched_grid, &error),
+                      MG_STATUS_OK, "patch phase3 grid", &error) ||
+        expect_status(mgGraphExecPatchDispatchBuffer(exec, phase3_dispatch_id, 0, dst_buffer,
+                                                     sizeof(uint32_t) * 4, &error),
+                      MG_STATUS_OK, "patch phase3 dispatch buffer offset", &error) ||
+        expect_status(mgGraphExecPatchCopyNode(exec, phase3_copy_id, &patched_copy, &error),
+                      MG_STATUS_OK, "patch phase3 copy", &error) ||
+        expect_status(mgGraphExecPatchFillNode(exec, phase3_fill_id, &patched_fill, &error),
+                      MG_STATUS_OK, "patch phase3 fill", &error) ||
+        expect_status(mgGraphExecPatchEventValue(exec, phase3_signal_id, 2, &error), MG_STATUS_OK,
+                      "patch phase3 event value", &error) ||
+        expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
+                      "launch phase3 patched graph", &error) ||
+        expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK, "sync phase3 patched",
+                      &error)) {
+        goto cleanup;
+    }
+    uint8_t expected_patched_bytes[8] = {5, 6, 7, 8, 0x22, 0x22, 0x22, 0x22};
+    if (phase3_values[0] != 0 || phase3_values[1] != 0 || phase3_values[4] != 2 ||
+        phase3_values[5] != 2 || phase3_values[6] != 2 || phase3_values[7] != 2 ||
+        check_bytes(phase3_bytes, expected_patched_bytes, 8, "phase3 patched copy/fill")) {
+        fprintf(stderr, "phase3 patched dispatch output is wrong\n");
         goto cleanup;
     }
 

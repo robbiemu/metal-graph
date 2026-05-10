@@ -59,7 +59,8 @@ typedef enum mg_error_stage {
     MG_ERROR_STAGE_COMPLETE = 6,
     MG_ERROR_STAGE_SYNC = 7,
     MG_ERROR_STAGE_PLAN_MEMORY = 8,
-    MG_ERROR_STAGE_BACKEND_ALLOCATE = 9
+    MG_ERROR_STAGE_BACKEND_ALLOCATE = 9,
+    MG_ERROR_STAGE_PATCH = 10
 } mg_error_stage_t;
 
 typedef enum mg_node_kind {
@@ -83,6 +84,25 @@ typedef struct mg_buffer_binding {
     size_t offset;
 } mg_buffer_binding_t;
 
+/* Small dispatch scalar copied into graph construction and exec state. */
+typedef struct mg_scalar_binding {
+    uint32_t index;
+    const void *data;
+    size_t byte_count;
+} mg_scalar_binding_t;
+
+typedef uint64_t mg_patch_flags_t;
+
+#define MG_PATCH_DISPATCH_GRID ((mg_patch_flags_t)1u << 0)
+#define MG_PATCH_DISPATCH_BUFFER ((mg_patch_flags_t)1u << 1)
+#define MG_PATCH_DISPATCH_SCALAR ((mg_patch_flags_t)1u << 2)
+#define MG_PATCH_COPY_BUFFER ((mg_patch_flags_t)1u << 3)
+#define MG_PATCH_COPY_RANGE ((mg_patch_flags_t)1u << 4)
+#define MG_PATCH_FILL_BUFFER ((mg_patch_flags_t)1u << 5)
+#define MG_PATCH_FILL_RANGE ((mg_patch_flags_t)1u << 6)
+#define MG_PATCH_FILL_VALUE ((mg_patch_flags_t)1u << 7)
+#define MG_PATCH_EVENT_VALUE ((mg_patch_flags_t)1u << 8)
+
 typedef struct mg_dispatch_desc {
     size_t size;
     const char *metallib_path;
@@ -91,6 +111,13 @@ typedef struct mg_dispatch_desc {
     uint32_t threads_per_threadgroup[3];
     const mg_buffer_binding_t *buffers;
     uint32_t buffer_count;
+    /*
+     * Phase 3 scalar bindings are copied by value. max_grid_size bounds future
+     * MG_PATCH_DISPATCH_GRID updates; zero max_grid_size defaults to the initial grid_size.
+     */
+    const mg_scalar_binding_t *scalars;
+    uint32_t scalar_count;
+    uint32_t max_grid_size[3];
 } mg_dispatch_desc_t;
 
 /*
@@ -200,8 +227,16 @@ MG_API void mgGraphDestroy(mg_graph_t *graph);
 MG_API mg_status_t mgGraphSetArena(mg_graph_t *graph, mg_arena_t *arena, mg_error_t **out_error);
 
 /*
+ * Declares which compatible fields may be patched after instantiation. Patch flags are graph
+ * construction metadata: they are frozen into GraphExec and do not patch the source graph.
+ */
+MG_API mg_status_t mgGraphSetNodePatchFlags(mg_graph_t *graph, mg_node_t *node,
+                                            mg_patch_flags_t flags, mg_error_t **out_error);
+
+/*
  * Nodes are owned by their parent graph and are invalid after mgGraphDestroy.
- * Phase 1 nodes are not patchable; instantiate a new graph exec to change node parameters.
+ * By default node parameters are frozen at instantiation. Phase 3 patching requires declaring
+ * compatible fields with mgGraphSetNodePatchFlags before instantiation.
  */
 MG_API mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *desc,
                                           mg_node_t **out_node, mg_error_t **out_error);
@@ -232,6 +267,30 @@ MG_API mg_status_t mgGraphValidate(const mg_graph_t *graph, mg_error_t **out_err
 MG_API mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device,
                                       mg_graph_exec_t **out_exec, mg_error_t **out_error);
 MG_API void mgGraphExecDestroy(mg_graph_exec_t *exec);
+
+/*
+ * Phase 3 default exec patch APIs.
+ *
+ * Patches address instantiated nodes by mg_node_id_t and mutate only the exec's default state.
+ * Successful patches affect future launches only. Patches are rejected while a launch using the
+ * exec is in flight, and a failed patch leaves the previous exec state usable. Topology changes,
+ * workspace/liveness changes, and per-launch overlays are not supported in Phase 3.
+ */
+MG_API mg_status_t mgGraphExecPatchDispatchGrid(mg_graph_exec_t *exec, mg_node_id_t node_id,
+                                                const uint32_t grid_size[3],
+                                                mg_error_t **out_error);
+MG_API mg_status_t mgGraphExecPatchDispatchBuffer(mg_graph_exec_t *exec, mg_node_id_t node_id,
+                                                  uint32_t index, mg_buffer_t *buffer,
+                                                  size_t offset, mg_error_t **out_error);
+MG_API mg_status_t mgGraphExecPatchDispatchScalar(mg_graph_exec_t *exec, mg_node_id_t node_id,
+                                                  uint32_t index, const void *data,
+                                                  size_t byte_count, mg_error_t **out_error);
+MG_API mg_status_t mgGraphExecPatchCopyNode(mg_graph_exec_t *exec, mg_node_id_t node_id,
+                                            const mg_copy_desc_t *desc, mg_error_t **out_error);
+MG_API mg_status_t mgGraphExecPatchFillNode(mg_graph_exec_t *exec, mg_node_id_t node_id,
+                                            const mg_fill_desc_t *desc, mg_error_t **out_error);
+MG_API mg_status_t mgGraphExecPatchEventValue(mg_graph_exec_t *exec, mg_node_id_t node_id,
+                                              uint64_t value, mg_error_t **out_error);
 
 /* Launches create fresh command buffers. Launch handles are destroyed with mgLaunchDestroy. */
 MG_API mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream,

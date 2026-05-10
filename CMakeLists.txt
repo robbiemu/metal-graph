@@ -20,6 +20,7 @@ add_library(metal_graph STATIC
   src/core/buffer.c
   src/core/error.c
   src/core/graph.c
+  src/core/patch.c
   src/core/version.c
   ${MG_BACKEND_SOURCE}
 )

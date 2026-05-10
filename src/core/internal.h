@@ -20,8 +20,11 @@ typedef struct mg_dispatch_node {
     char *kernel_name;
     uint32_t grid_size[3];
     uint32_t threads_per_threadgroup[3];
+    uint32_t max_grid_size[3];
     mg_buffer_binding_t *buffers;
     uint32_t buffer_count;
+    mg_scalar_binding_t *scalars;
+    uint32_t scalar_count;
 } mg_dispatch_node_t;
 
 typedef struct mg_copy_node {
@@ -103,6 +106,7 @@ struct mg_node {
     mg_node_id_t id;
     size_t index;
     mg_node_kind_t kind;
+    mg_patch_flags_t patch_flags;
     union {
         mg_dispatch_node_t dispatch;
         mg_copy_node_t copy;
@@ -125,17 +129,22 @@ struct mg_graph {
 
 typedef struct mg_exec_dispatch {
     mg_node_id_t id;
+    mg_patch_flags_t patch_flags;
     char *metallib_path;
     char *kernel_name;
     uint32_t grid_size[3];
     uint32_t threads_per_threadgroup[3];
+    uint32_t max_grid_size[3];
     mg_buffer_binding_t *buffers;
     uint32_t buffer_count;
+    mg_scalar_binding_t *scalars;
+    uint32_t scalar_count;
     void *pipeline_impl;
 } mg_exec_dispatch_t;
 
 typedef struct mg_exec_copy {
     mg_node_id_t id;
+    mg_patch_flags_t patch_flags;
     mg_buffer_t *src;
     size_t src_offset;
     mg_buffer_t *dst;
@@ -145,6 +154,7 @@ typedef struct mg_exec_copy {
 
 typedef struct mg_exec_fill {
     mg_node_id_t id;
+    mg_patch_flags_t patch_flags;
     mg_buffer_t *dst;
     size_t dst_offset;
     size_t byte_count;
@@ -153,6 +163,7 @@ typedef struct mg_exec_fill {
 
 typedef struct mg_exec_event {
     mg_node_id_t id;
+    mg_patch_flags_t patch_flags;
     mg_event_t *event;
     uint64_t value;
 } mg_exec_event_t;
@@ -208,10 +219,13 @@ struct mg_graph_exec {
     size_t node_count;
     void *device_impl;
     mg_workspace_plan_t workspace;
+    uint32_t in_flight_count;
 };
 
 struct mg_launch {
     void *impl;
+    mg_graph_exec_t *exec;
+    bool completed;
     mg_buffer_t **retained_buffers;
     size_t retained_buffer_count;
     mg_event_t **retained_events;
