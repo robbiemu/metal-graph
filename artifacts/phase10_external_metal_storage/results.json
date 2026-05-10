@@ -1,0 +1,16 @@
+{
+  "phase": "phase-10-external-metal-storage-wrap",
+  "external_metal_wrap_supported": true,
+  "external_wrap_zero_copy_verified": true,
+  "nonzero_range_verified": true,
+  "launch_retention_verified": true,
+  "graph_exec_retention_verified": true,
+  "copy_bytes_for_external_wrap": 0,
+  "dispatch_path_verified": true,
+  "copy_path_verified": true,
+  "fill_path_verified": true,
+  "origin_diagnostics_verified": true,
+  "mlx_zero_copy_supported": false,
+  "mlx_zero_copy_status": "unchanged_or_unsupported_public_api",
+  "performance_claims": "none"
+}

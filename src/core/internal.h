@@ -108,6 +108,17 @@ struct mg_buffer {
     void *impl;
     void *device_impl;
     size_t length;
+    size_t byte_offset;
+    mg_buffer_origin_kind_t origin_kind;
+    uint8_t is_zero_copy;
+    uint8_t is_external;
+    uint8_t is_host_visible;
+    uint8_t is_mutable;
+    uint8_t retained_backend_impl;
+    char *source_framework;
+    char *fallback_reason;
+    void *owner_context;
+    void (*owner_release)(void *owner_context);
     uint32_t ref_count;
 };
 

@@ -152,12 +152,9 @@ int main(void) {
     mgErrorDestroy(error);
     error = NULL;
 
-    mg_buffer_t mps_buffer = {
-        NULL,
-        NULL,
-        sizeof(float) * 4,
-        1,
-    };
+    mg_buffer_t mps_buffer = {0};
+    mps_buffer.length = sizeof(float) * 4;
+    mps_buffer.ref_count = 1;
     size_t mps_shape[1] = {4};
     mg_mpsgraph_tensor_desc_t mps_tensor;
     memset(&mps_tensor, 0, sizeof(mps_tensor));
@@ -365,24 +362,15 @@ int main(void) {
 
     uint32_t scalar_value = 7;
     uint32_t scalar_storage = scalar_value;
-    mg_buffer_t dispatch_buffer = {
-        NULL,
-        NULL,
-        16,
-        1,
-    };
-    mg_buffer_t tiny_buffer = {
-        NULL,
-        NULL,
-        4,
-        1,
-    };
-    mg_buffer_t copy_dst = {
-        NULL,
-        NULL,
-        16,
-        1,
-    };
+    mg_buffer_t dispatch_buffer = {0};
+    dispatch_buffer.length = 16;
+    dispatch_buffer.ref_count = 1;
+    mg_buffer_t tiny_buffer = {0};
+    tiny_buffer.length = 4;
+    tiny_buffer.ref_count = 1;
+    mg_buffer_t copy_dst = {0};
+    copy_dst.length = 16;
+    copy_dst.ref_count = 1;
     mg_dispatch_desc_t resource_desc = test_dispatch_desc();
     mg_buffer_binding_t resource_binding = {
         0,

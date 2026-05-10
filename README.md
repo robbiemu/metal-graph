@@ -99,6 +99,17 @@ The project starts C-first because it gives the cleanest compatibility path:
 
 The C API uses opaque handles and status codes. Ownership, lifetime, thread-safety, and backend error reporting should be documented before the API is treated as stable.
 
+Phase 10 adds an Apple/Metal-specific extension header for trusted callers that need to wrap an
+externally owned `id<MTLBuffer>` as `mg_buffer_t` without copying:
+
+```text
+include/metal_graph/metal_graph_metal.h
+```
+
+The core `metal_graph.h` header remains framework-neutral. External wraps can be inspected with
+`mgBufferGetOriginInfo`; MLX zero-copy remains unsupported until a later phase proves a supported
+MLX storage export path or supported shim.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
