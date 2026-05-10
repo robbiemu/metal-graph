@@ -224,7 +224,8 @@ The Phase 5 C ABI uses descriptor metadata rather than native objects. `mg_mpsgr
 an MPSGraphExecutable package path, and ordered `mg_mpsgraph_tensor_desc_t` arrays describe feed and
 target buffers. Phase 5 supports fixed-shape contiguous float32 tensors with zero byte offset. The
 backend loads the package privately during instantiation and clones/retains tensor metadata and
-buffers into GraphExec state.
+buffers into GraphExec state. It also owns an exec-private copy of the package so removing the
+caller-provided package path after successful instantiation does not invalidate the exec.
 
 MPSGraph nodes force direct encoding/ICB fallback. The initial backend may conservatively segment
 command buffers around MPSGraph nodes and synchronize prior raw Metal work before encoding an

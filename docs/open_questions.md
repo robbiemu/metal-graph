@@ -202,6 +202,7 @@ Decision:
 - MPSGraph should not become a required dependency of raw Metal Graph execution.
 - Phase 5 uses MPSGraphExecutable package paths and fixed feed/target tensor metadata in the core C
   ABI, rather than native MPSGraph object handles.
+- GraphExec owns an exec-private copy of the package after successful instantiation.
 - The initial backend uses conservative command-buffer segmentation around MPSGraph nodes and may
   synchronize prior raw Metal work before MPSGraph encoding.
 

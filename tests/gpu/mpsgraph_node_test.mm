@@ -222,6 +222,7 @@ int main(void) {
         }
         mgGraphDestroy(graph);
         graph = NULL;
+        [[NSFileManager defaultManager] removeItemAtPath:packagePath error:nil];
 
         memset(&diagnostics, 0, sizeof(diagnostics));
         diagnostics.size = sizeof(diagnostics);

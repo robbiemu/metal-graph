@@ -73,8 +73,9 @@ Phase 5 uses a package-path based C descriptor:
   order.
 
 The Metal backend loads the executable package privately during instantiation. The resulting
-GraphExec owns the copied package path, tensor metadata, retained buffers, and backend executable
-object.
+GraphExec owns the copied package path, an exec-private package copy, tensor metadata, retained
+buffers, and backend executable object. Destroying the source graph or removing the caller-provided
+package path after successful instantiation does not invalidate the exec.
 
 ## Backend Boundary
 

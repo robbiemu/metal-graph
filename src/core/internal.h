@@ -195,6 +195,7 @@ typedef struct mg_exec_event {
 typedef struct mg_exec_mpsgraph {
     mg_node_id_t id;
     char *package_path;
+    char *retained_package_path;
     mg_mpsgraph_tensor_t *feeds;
     uint32_t feed_count;
     mg_mpsgraph_tensor_t *targets;

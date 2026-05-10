@@ -184,8 +184,13 @@ static void mg_exec_mpsgraph_clear(mg_exec_mpsgraph_t *mpsgraph) {
         id executable = (__bridge_transfer id)mpsgraph->executable_impl;
         (void)executable;
     }
+    if (mpsgraph->retained_package_path) {
+        NSString *path = mg_string(mpsgraph->retained_package_path);
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    }
 #endif
     free(mpsgraph->package_path);
+    free(mpsgraph->retained_package_path);
     mg_exec_mpsgraph_tensor_array_clear(mpsgraph->feeds, mpsgraph->feed_count);
     mg_exec_mpsgraph_tensor_array_clear(mpsgraph->targets, mpsgraph->target_count);
     memset(mpsgraph, 0, sizeof(*mpsgraph));
@@ -365,10 +370,31 @@ static MPSGraphTensorData *mg_mpsgraph_tensor_data(const mg_mpsgraph_tensor_t *t
 static mg_status_t mg_mpsgraph_load_executable(mg_exec_mpsgraph_t *mpsgraph,
                                                mg_error_t **out_error) {
 #if MG_ENABLE_MPSGRAPH
-    NSURL *url = [NSURL fileURLWithPath:mg_string(mpsgraph->package_path)];
+    NSString *sourcePath = mg_string(mpsgraph->package_path);
+    NSString *retainedPath = [NSTemporaryDirectory()
+        stringByAppendingPathComponent:[NSString stringWithFormat:@"metal-graph-exec-%@"
+                                                                   ".mpsgraphpackage",
+                                                                  [[NSUUID UUID] UUIDString]]];
+    NSURL *sourceURL = [NSURL fileURLWithPath:sourcePath];
+    NSURL *retainedURL = [NSURL fileURLWithPath:retainedPath];
+    NSError *copyError = nil;
+    if (![[NSFileManager defaultManager] copyItemAtURL:sourceURL
+                                                 toURL:retainedURL
+                                                 error:&copyError]) {
+        return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_INSTANTIATE,
+                            mpsgraph->id, "failed to retain MPSGraph executable package",
+                            mg_ns_error_message(copyError));
+    }
+    mpsgraph->retained_package_path = mg_strdup([retainedPath fileSystemRepresentation]);
+    if (!mpsgraph->retained_package_path) {
+        [[NSFileManager defaultManager] removeItemAtURL:retainedURL error:nil];
+        return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
+    }
+
     @try {
         MPSGraphExecutable *executable =
-            [[MPSGraphExecutable alloc] initWithMPSGraphPackageAtURL:url compilationDescriptor:nil];
+            [[MPSGraphExecutable alloc] initWithMPSGraphPackageAtURL:retainedURL
+                                               compilationDescriptor:nil];
         if (!executable) {
             return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_INSTANTIATE,
                                 mpsgraph->id, "failed to load MPSGraph executable package", NULL);
