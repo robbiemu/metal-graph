@@ -145,3 +145,72 @@ Future work:
 - resource-hazard-aware multi-dispatch ICB eligibility;
 - per-group diagnostics instead of last/global fallback reason;
 - broader dispatch resource contracts for hazard analysis.
+
+### MPSGraph Integration Direction
+
+Phase 5 raises an apparent layering question: MPSGraph is a higher-level tensor graph API, while
+Metal Graph is a lower-level explicit execution graph. At first glance, this suggests MPSGraph
+should wrap Metal Graph rather than Metal Graph hosting an MPSGraph node.
+
+The decision is that Metal Graph remains the outer orchestration layer, and MPSGraph is treated as
+an optional tensor-subgraph island.
+
+This is intentional. Metal Graph is not trying to replace MPSGraph as a tensor compiler. It owns a
+different layer of the problem:
+
+- explicit graph topology;
+- raw Metal dispatch/copy/fill/event/barrier nodes;
+- launch lifecycle;
+- resource retention;
+- patch/update policy;
+- synchronization boundaries;
+- backend diagnostics and fallback behavior.
+
+MPSGraph owns a different set of concerns:
+
+- tensor subgraph representation;
+- tensor operation lowering;
+- tensor shape, dtype, and layout constraints;
+- execution details internal to the MPSGraph executable.
+
+The important learning is that "higher level" does not automatically mean "outer layer." For pure
+tensor workloads, MPSGraph should remain the natural top-level API. But Metal Graph targets
+workloads that mix tensor execution with explicit raw Metal work, event ordering, patchable
+resources, transient memory planning, and CUDA-Graph-like repeated launches. In that setting, Metal
+Graph must remain the conductor.
+
+Phase 5 therefore integrates MPSGraph as an optional node type rather than making MPSGraph the
+runtime substrate.
+
+This keeps the core model stable:
+
+```text
+Graph -> GraphExec -> Launch
+```
+
+and allows one graph execution plan to coordinate both raw Metal work and MPSGraph work without
+exposing MPSGraph as the public graph object.
+
+Decision:
+
+- Metal Graph remains the outer execution-orchestration layer.
+- MPSGraph support is optional and feature-gated.
+- MPSGraph nodes represent tensor-subgraph islands inside a Metal Graph execution plan.
+- Pure tensor workloads may use MPSGraph directly.
+- Mixed workloads may use Metal Graph to orchestrate raw Metal nodes and MPSGraph nodes together.
+- Metal Graph should not attempt to reimplement MPSGraph tensor compilation.
+- MPSGraph should not become a required dependency of raw Metal Graph execution.
+- Phase 5 uses MPSGraphExecutable package paths and fixed feed/target tensor metadata in the core C
+  ABI, rather than native MPSGraph object handles.
+- GraphExec owns an exec-private copy of the package after successful instantiation.
+- The initial backend uses conservative command-buffer segmentation around MPSGraph nodes and may
+  synchronize prior raw Metal work before MPSGraph encoding.
+
+Future work:
+
+- broaden mixed-node coverage beyond the initial raw-dispatch/MPSGraph/raw-dispatch path;
+- define the minimal C ABI boundary for importing or describing MPSGraph executables;
+- decide whether native MPSGraph objects live behind an Objective-C extension header rather than
+  the core public C header;
+- clarify supported shape/dtype/layout compatibility rules;
+- document how MPSGraph node errors map into Metal Graph error reporting;

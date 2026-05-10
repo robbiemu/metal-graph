@@ -49,6 +49,24 @@ typedef struct mg_event_node {
     uint64_t value;
 } mg_event_node_t;
 
+typedef struct mg_mpsgraph_tensor {
+    mg_buffer_t *buffer;
+    size_t byte_offset;
+    size_t byte_count;
+    mg_tensor_data_type_t data_type;
+    mg_tensor_layout_t layout;
+    uint32_t rank;
+    size_t *shape;
+} mg_mpsgraph_tensor_t;
+
+typedef struct mg_mpsgraph_node {
+    char *package_path;
+    mg_mpsgraph_tensor_t *feeds;
+    uint32_t feed_count;
+    mg_mpsgraph_tensor_t *targets;
+    uint32_t target_count;
+} mg_mpsgraph_node_t;
+
 typedef struct mg_workspace_node {
     size_t size;
     size_t alignment;
@@ -115,6 +133,7 @@ struct mg_node {
         mg_copy_node_t copy;
         mg_fill_node_t fill;
         mg_event_node_t event;
+        mg_mpsgraph_node_t mpsgraph;
         mg_workspace_node_t workspace;
         mg_internal_workspace_fill_node_t workspace_fill;
     } as;
@@ -173,6 +192,17 @@ typedef struct mg_exec_event {
     uint64_t value;
 } mg_exec_event_t;
 
+typedef struct mg_exec_mpsgraph {
+    mg_node_id_t id;
+    char *package_path;
+    char *retained_package_path;
+    mg_mpsgraph_tensor_t *feeds;
+    uint32_t feed_count;
+    mg_mpsgraph_tensor_t *targets;
+    uint32_t target_count;
+    void *executable_impl;
+} mg_exec_mpsgraph_t;
+
 typedef struct mg_exec_workspace {
     mg_node_id_t id;
     size_t size;
@@ -197,6 +227,7 @@ typedef struct mg_exec_node {
         mg_exec_copy_t copy;
         mg_exec_fill_t fill;
         mg_exec_event_t event;
+        mg_exec_mpsgraph_t mpsgraph;
         mg_node_id_t barrier_id;
         mg_exec_workspace_t workspace;
         mg_exec_workspace_fill_t workspace_fill;
@@ -241,6 +272,9 @@ struct mg_graph_exec {
 
 struct mg_launch {
     void *impl;
+    void **impls;
+    size_t impl_count;
+    size_t impl_capacity;
     mg_graph_exec_t *exec;
     bool completed;
     mg_buffer_t **retained_buffers;
@@ -257,6 +291,7 @@ mg_status_t mg_set_error(mg_error_t **out_error, mg_status_t status, mg_error_st
 mg_status_t mg_set_oom(mg_error_t **out_error, mg_error_stage_t stage);
 
 void mg_dispatch_node_clear(mg_dispatch_node_t *dispatch);
+void mg_mpsgraph_node_clear(mg_mpsgraph_node_t *mpsgraph);
 void mg_node_clear(mg_node_t *node);
 mg_status_t mg_graph_topological_order(const mg_graph_t *graph, size_t *order,
                                        mg_error_t **out_error);

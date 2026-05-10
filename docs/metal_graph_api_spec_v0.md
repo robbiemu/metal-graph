@@ -195,3 +195,43 @@ naming convention and behavior unless an explicit API version change says otherw
 
 Future ICB work includes dependency-aware grouping, resource-hazard-aware multi-dispatch
 eligibility, per-group diagnostics, and broader dispatch resource contracts for hazard analysis.
+
+## Phase 5 Direction
+
+Phase 5 integrates MPSGraph as an optional tensor-subgraph island inside a Metal Graph execution
+plan. Metal Graph remains the outer orchestration layer for topology, dependencies, launch
+lifecycle, resource retention, synchronization boundaries, errors, diagnostics, and fallback
+behavior. MPSGraph owns tensor subgraph representation, tensor operation lowering, shape/dtype/layout
+constraints, and execution details internal to the MPSGraph executable.
+
+The public model remains:
+
+```text
+Graph -> GraphExec -> Launch
+```
+
+Phase 5 must prove that Metal Graph can safely schedule an MPSGraph island alongside raw Metal
+dispatch/copy/fill/event/barrier work. It must not reimplement MPSGraph, convert arbitrary MLX
+programs, optimize tensor graphs, or make MPSGraph the public runtime substrate.
+
+MPSGraph support is optional and feature-gated. Pure tensor workloads may use MPSGraph directly.
+Mixed workloads may use Metal Graph to orchestrate raw Metal nodes and MPSGraph nodes together.
+Native MPSGraph objects must not appear in the core public C header; if native-object interop is
+needed, it should live behind an explicit Objective-C extension boundary or another deliberately
+separate adapter.
+
+The Phase 5 C ABI uses descriptor metadata rather than native objects. `mg_mpsgraph_desc_t` names
+an MPSGraphExecutable package path, and ordered `mg_mpsgraph_tensor_desc_t` arrays describe feed and
+target buffers. Phase 5 supports fixed-shape contiguous float32 tensors with zero byte offset. The
+backend loads the package privately during instantiation and clones/retains tensor metadata and
+buffers into GraphExec state. It also owns an exec-private copy of the package so removing the
+caller-provided package path after successful instantiation does not invalidate the exec.
+
+MPSGraph nodes force direct encoding/ICB fallback. The initial backend may conservatively segment
+command buffers around MPSGraph nodes and synchronize prior raw Metal work before encoding an
+MPSGraph executable. This is a correctness choice for Phase 5, not a long-term performance claim.
+
+Future Phase 5 design work includes defining broader import/description boundaries for MPSGraph
+executables, richer shape/dtype/layout compatibility rules, MPSGraph-to-`mg_error_t` error mapping,
+and broader mixed-node conformance coverage beyond the initial raw-dispatch/MPSGraph/raw-dispatch
+path.

@@ -2,6 +2,9 @@
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#if MG_ENABLE_MPSGRAPH
+#import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
+#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -106,6 +109,93 @@ static void mg_exec_dispatch_clear(mg_exec_dispatch_t *dispatch) {
     memset(dispatch, 0, sizeof(*dispatch));
 }
 
+static mg_status_t mg_clone_mpsgraph_tensors(const mg_mpsgraph_tensor_t *src, uint32_t count,
+                                             mg_mpsgraph_tensor_t **out_tensors,
+                                             uint32_t *out_count, mg_error_t **out_error) {
+    *out_tensors = NULL;
+    *out_count = 0;
+    if (count == 0) {
+        return MG_STATUS_OK;
+    }
+
+    mg_mpsgraph_tensor_t *tensors = (mg_mpsgraph_tensor_t *)calloc(count, sizeof(*tensors));
+    if (!tensors) {
+        return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
+    }
+
+    for (uint32_t i = 0; i < count; ++i) {
+        tensors[i] = src[i];
+        tensors[i].shape = NULL;
+        if (src[i].rank > 0) {
+            tensors[i].shape = (size_t *)malloc(sizeof(*tensors[i].shape) * src[i].rank);
+            if (!tensors[i].shape) {
+                for (uint32_t j = 0; j < i; ++j) {
+                    mg_buffer_release(tensors[j].buffer);
+                    free(tensors[j].shape);
+                }
+                free(tensors);
+                return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
+            }
+            memcpy(tensors[i].shape, src[i].shape, sizeof(*tensors[i].shape) * src[i].rank);
+        }
+        mg_buffer_retain(tensors[i].buffer);
+    }
+
+    *out_tensors = tensors;
+    *out_count = count;
+    return MG_STATUS_OK;
+}
+
+static void mg_exec_mpsgraph_tensor_array_clear(mg_mpsgraph_tensor_t *tensors, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        mg_buffer_release(tensors[i].buffer);
+        free(tensors[i].shape);
+    }
+    free(tensors);
+}
+
+static mg_status_t mg_clone_mpsgraph(const mg_node_t *node, mg_exec_mpsgraph_t *out_mpsgraph,
+                                     mg_error_t **out_error) {
+    memset(out_mpsgraph, 0, sizeof(*out_mpsgraph));
+    out_mpsgraph->id = node->id;
+    out_mpsgraph->package_path = mg_strdup(node->as.mpsgraph.package_path);
+    if (!out_mpsgraph->package_path) {
+        return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
+    }
+
+    mg_status_t status =
+        mg_clone_mpsgraph_tensors(node->as.mpsgraph.feeds, node->as.mpsgraph.feed_count,
+                                  &out_mpsgraph->feeds, &out_mpsgraph->feed_count, out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+    return mg_clone_mpsgraph_tensors(node->as.mpsgraph.targets, node->as.mpsgraph.target_count,
+                                     &out_mpsgraph->targets, &out_mpsgraph->target_count,
+                                     out_error);
+}
+
+static void mg_exec_mpsgraph_clear(mg_exec_mpsgraph_t *mpsgraph) {
+    if (!mpsgraph) {
+        return;
+    }
+
+#if MG_ENABLE_MPSGRAPH
+    if (mpsgraph->executable_impl) {
+        id executable = (__bridge_transfer id)mpsgraph->executable_impl;
+        (void)executable;
+    }
+    if (mpsgraph->retained_package_path) {
+        NSString *path = mg_string(mpsgraph->retained_package_path);
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    }
+#endif
+    free(mpsgraph->package_path);
+    free(mpsgraph->retained_package_path);
+    mg_exec_mpsgraph_tensor_array_clear(mpsgraph->feeds, mpsgraph->feed_count);
+    mg_exec_mpsgraph_tensor_array_clear(mpsgraph->targets, mpsgraph->target_count);
+    memset(mpsgraph, 0, sizeof(*mpsgraph));
+}
+
 static void mg_exec_node_clear(mg_exec_node_t *node) {
     if (!node) {
         return;
@@ -128,6 +218,9 @@ static void mg_exec_node_clear(mg_exec_node_t *node) {
     case MG_NODE_EVENT_SIGNAL:
         mg_event_release(node->as.event.event);
         memset(&node->as.event, 0, sizeof(node->as.event));
+        break;
+    case MG_NODE_MPSGRAPH:
+        mg_exec_mpsgraph_clear(&node->as.mpsgraph);
         break;
     case MG_NODE_BARRIER:
         node->as.barrier_id = MG_NODE_ID_INVALID;
@@ -184,6 +277,8 @@ static mg_status_t mg_clone_exec_node(const mg_node_t *src, mg_exec_node_t *dst,
     case MG_NODE_BARRIER:
         dst->as.barrier_id = src->id;
         return MG_STATUS_OK;
+    case MG_NODE_MPSGRAPH:
+        return mg_clone_mpsgraph(src, &dst->as.mpsgraph, out_error);
     default:
         if ((int)src->kind == MG_NODE_INTERNAL_WORKSPACE) {
             dst->as.workspace.id = src->id;
@@ -244,6 +339,153 @@ static void mg_icb_backend_destroy(mg_icb_plan_t *icb) {
     id icbObject = (__bridge_transfer id)icb->backend_impl;
     (void)icbObject;
     icb->backend_impl = NULL;
+}
+
+#if MG_ENABLE_MPSGRAPH
+static MPSDataType mg_mpsgraph_data_type(mg_tensor_data_type_t data_type) {
+    switch (data_type) {
+    case MG_TENSOR_DATA_TYPE_FLOAT32:
+        return MPSDataTypeFloat32;
+    default:
+        return MPSDataTypeInvalid;
+    }
+}
+
+static MPSShape *mg_mpsgraph_shape(const mg_mpsgraph_tensor_t *tensor) {
+    NSMutableArray<NSNumber *> *shape = [NSMutableArray arrayWithCapacity:tensor->rank];
+    for (uint32_t i = 0; i < tensor->rank; ++i) {
+        [shape addObject:@((NSUInteger)tensor->shape[i])];
+    }
+    return shape;
+}
+
+static MPSGraphTensorData *mg_mpsgraph_tensor_data(const mg_mpsgraph_tensor_t *tensor) {
+    id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)tensor->buffer->impl;
+    return [[MPSGraphTensorData alloc] initWithMTLBuffer:buffer
+                                                   shape:mg_mpsgraph_shape(tensor)
+                                                dataType:mg_mpsgraph_data_type(tensor->data_type)];
+}
+#endif
+
+static mg_status_t mg_mpsgraph_load_executable(mg_exec_mpsgraph_t *mpsgraph,
+                                               mg_error_t **out_error) {
+#if MG_ENABLE_MPSGRAPH
+    NSString *sourcePath = mg_string(mpsgraph->package_path);
+    NSString *retainedPath = [NSTemporaryDirectory()
+        stringByAppendingPathComponent:[NSString stringWithFormat:@"metal-graph-exec-%@"
+                                                                   ".mpsgraphpackage",
+                                                                  [[NSUUID UUID] UUIDString]]];
+    NSURL *sourceURL = [NSURL fileURLWithPath:sourcePath];
+    NSURL *retainedURL = [NSURL fileURLWithPath:retainedPath];
+    NSError *copyError = nil;
+    if (![[NSFileManager defaultManager] copyItemAtURL:sourceURL
+                                                 toURL:retainedURL
+                                                 error:&copyError]) {
+        return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_INSTANTIATE,
+                            mpsgraph->id, "failed to retain MPSGraph executable package",
+                            mg_ns_error_message(copyError));
+    }
+    mpsgraph->retained_package_path = mg_strdup([retainedPath fileSystemRepresentation]);
+    if (!mpsgraph->retained_package_path) {
+        [[NSFileManager defaultManager] removeItemAtURL:retainedURL error:nil];
+        return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
+    }
+
+    @try {
+        MPSGraphExecutable *executable =
+            [[MPSGraphExecutable alloc] initWithMPSGraphPackageAtURL:retainedURL
+                                               compilationDescriptor:nil];
+        if (!executable) {
+            return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_INSTANTIATE,
+                                mpsgraph->id, "failed to load MPSGraph executable package", NULL);
+        }
+        mpsgraph->executable_impl = (__bridge_retained void *)executable;
+        return MG_STATUS_OK;
+    } @catch (NSException *exception) {
+        return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_INSTANTIATE,
+                            mpsgraph->id, "failed to load MPSGraph executable package",
+                            [[exception reason] UTF8String]);
+    }
+#else
+    (void)mpsgraph;
+    return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_INSTANTIATE,
+                        mpsgraph ? mpsgraph->id : MG_NODE_ID_INVALID,
+                        "MPSGraph support is not enabled in this build", NULL);
+#endif
+}
+
+static mg_status_t mg_mpsgraph_encode_node(mg_exec_mpsgraph_t *mpsgraph,
+                                           id<MTLCommandBuffer> commandBuffer,
+                                           mg_error_t **out_error) {
+#if MG_ENABLE_MPSGRAPH
+    if (!mpsgraph->executable_impl) {
+        return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE, mpsgraph->id,
+                            "MPSGraph executable is not loaded", NULL);
+    }
+
+    NSMutableArray<MPSGraphTensorData *> *inputs =
+        [NSMutableArray arrayWithCapacity:mpsgraph->feed_count];
+    NSMutableArray<MPSGraphTensorData *> *results =
+        [NSMutableArray arrayWithCapacity:mpsgraph->target_count];
+    for (uint32_t i = 0; i < mpsgraph->feed_count; ++i) {
+        MPSGraphTensorData *data = mg_mpsgraph_tensor_data(&mpsgraph->feeds[i]);
+        if (!data) {
+            return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE,
+                                mpsgraph->id, "failed to create MPSGraph feed tensor data", NULL);
+        }
+        [inputs addObject:data];
+    }
+    for (uint32_t i = 0; i < mpsgraph->target_count; ++i) {
+        MPSGraphTensorData *data = mg_mpsgraph_tensor_data(&mpsgraph->targets[i]);
+        if (!data) {
+            return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE,
+                                mpsgraph->id, "failed to create MPSGraph target tensor data", NULL);
+        }
+        [results addObject:data];
+    }
+
+    MPSCommandBuffer *mpsCommandBuffer =
+        [MPSCommandBuffer commandBufferWithCommandBuffer:commandBuffer];
+    MPSGraphExecutable *executable = (__bridge MPSGraphExecutable *)mpsgraph->executable_impl;
+    @try {
+        [executable encodeToCommandBuffer:mpsCommandBuffer
+                              inputsArray:inputs
+                             resultsArray:results
+                      executionDescriptor:nil];
+    } @catch (NSException *exception) {
+        return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE, mpsgraph->id,
+                            "failed to encode MPSGraph executable",
+                            [[exception reason] UTF8String]);
+    }
+    return MG_STATUS_OK;
+#else
+    (void)mpsgraph;
+    (void)commandBuffer;
+    return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_ENCODE,
+                        mpsgraph ? mpsgraph->id : MG_NODE_ID_INVALID,
+                        "MPSGraph support is not enabled in this build", NULL);
+#endif
+}
+
+static mg_status_t mg_launch_retain_command_buffer(mg_launch_t *launch,
+                                                   id<MTLCommandBuffer> commandBuffer,
+                                                   mg_error_t **out_error) {
+    if (launch->impl_count == launch->impl_capacity) {
+        size_t next_capacity = launch->impl_capacity ? launch->impl_capacity * 2 : 4;
+        void **impls = (void **)realloc(launch->impls, next_capacity * sizeof(*impls));
+        if (!impls) {
+            return mg_set_oom(out_error, MG_ERROR_STAGE_ENCODE);
+        }
+        launch->impls = impls;
+        launch->impl_capacity = next_capacity;
+    }
+
+    void *retained = (__bridge_retained void *)commandBuffer;
+    launch->impls[launch->impl_count++] = retained;
+    if (!launch->impl) {
+        launch->impl = retained;
+    }
+    return MG_STATUS_OK;
 }
 
 static mg_icb_fallback_reason_t mg_icb_dispatch_eligible(const mg_exec_dispatch_t *dispatch) {
@@ -602,6 +844,16 @@ mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_
             return status;
         }
 
+        if (exec->nodes[i].kind == MG_NODE_MPSGRAPH) {
+            status = mg_mpsgraph_load_executable(&exec->nodes[i].as.mpsgraph, out_error);
+            if (status != MG_STATUS_OK) {
+                free(order);
+                mgGraphExecDestroy(exec);
+                return status;
+            }
+            continue;
+        }
+
         if (exec->nodes[i].kind != MG_NODE_DISPATCH) {
             continue;
         }
@@ -733,6 +985,10 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
         case MG_NODE_EVENT_SIGNAL:
             retainedEventCount += 1;
             break;
+        case MG_NODE_MPSGRAPH:
+            retainedCount += exec->nodes[i].as.mpsgraph.feed_count;
+            retainedCount += exec->nodes[i].as.mpsgraph.target_count;
+            break;
         default:
             if ((int)exec->nodes[i].kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
                 retainedCount += 1;
@@ -759,7 +1015,6 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
         }
     }
 
-    launch->impl = (__bridge_retained void *)commandBuffer;
     if (exec->workspace.backend_impl) {
         id workspace = (__bridge id)exec->workspace.backend_impl;
         launch->retained_workspace_impl = (__bridge_retained void *)workspace;
@@ -804,12 +1059,19 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
         exec->icb.groups_fallback = 0;
         exec->icb.last_fallback_reason = MG_ICB_FALLBACK_NONE;
         [commandBuffer commit];
+        mg_status_t retain_status =
+            mg_launch_retain_command_buffer(launch, commandBuffer, out_error);
+        if (retain_status != MG_STATUS_OK) {
+            mgLaunchDestroy(launch);
+            return retain_status;
+        }
         exec->in_flight_count++;
         launch->exec = exec;
         *out_launch = launch;
         return MG_STATUS_OK;
     }
 
+    bool commandBufferHasWork = exec->node_count == 0;
     for (size_t i = 0; i < exec->node_count; ++i) {
         mg_exec_node_t *node = &exec->nodes[i];
         switch (node->kind) {
@@ -847,6 +1109,7 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
                                           dispatch->threads_per_threadgroup[2]);
             [encoder dispatchThreads:grid threadsPerThreadgroup:threads];
             [encoder endEncoding];
+            commandBufferHasWork = true;
             break;
         }
         case MG_NODE_COPY: {
@@ -868,6 +1131,7 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
             launch->retained_buffers[launch->retained_buffer_count++] = node->as.copy.src;
             mg_buffer_retain(node->as.copy.dst);
             launch->retained_buffers[launch->retained_buffer_count++] = node->as.copy.dst;
+            commandBufferHasWork = true;
             break;
         }
         case MG_NODE_FILL: {
@@ -883,6 +1147,7 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
             [encoder endEncoding];
             mg_buffer_retain(node->as.fill.dst);
             launch->retained_buffers[launch->retained_buffer_count++] = node->as.fill.dst;
+            commandBufferHasWork = true;
             break;
         }
         case MG_NODE_EVENT_WAIT: {
@@ -890,6 +1155,7 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
             [commandBuffer encodeWaitForEvent:event value:node->as.event.value];
             mg_event_retain(node->as.event.event);
             launch->retained_events[launch->retained_event_count++] = node->as.event.event;
+            commandBufferHasWork = true;
             break;
         }
         case MG_NODE_EVENT_SIGNAL: {
@@ -897,10 +1163,70 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
             [commandBuffer encodeSignalEvent:event value:node->as.event.value];
             mg_event_retain(node->as.event.event);
             launch->retained_events[launch->retained_event_count++] = node->as.event.event;
+            commandBufferHasWork = true;
             break;
         }
         case MG_NODE_BARRIER:
             break;
+        case MG_NODE_MPSGRAPH: {
+            if (commandBufferHasWork) {
+                [commandBuffer commit];
+                mg_status_t retain_status =
+                    mg_launch_retain_command_buffer(launch, commandBuffer, out_error);
+                if (retain_status != MG_STATUS_OK) {
+                    mgLaunchDestroy(launch);
+                    return retain_status;
+                }
+                [commandBuffer waitUntilCompleted];
+                if (commandBuffer.status == MTLCommandBufferStatusError) {
+                    mgLaunchDestroy(launch);
+                    return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_COMPLETE,
+                                        node->as.mpsgraph.id,
+                                        "Metal command buffer failed before MPSGraph encode",
+                                        mg_ns_error_message(commandBuffer.error));
+                }
+                commandBuffer = [queue commandBuffer];
+                if (!commandBuffer) {
+                    mgLaunchDestroy(launch);
+                    return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE,
+                                        node->as.mpsgraph.id,
+                                        "failed to create Metal command buffer", NULL);
+                }
+                commandBufferHasWork = false;
+            }
+            mg_status_t status =
+                mg_mpsgraph_encode_node(&node->as.mpsgraph, commandBuffer, out_error);
+            if (status != MG_STATUS_OK) {
+                mgLaunchDestroy(launch);
+                return status;
+            }
+            for (uint32_t j = 0; j < node->as.mpsgraph.feed_count; ++j) {
+                mg_buffer_t *buffer = node->as.mpsgraph.feeds[j].buffer;
+                mg_buffer_retain(buffer);
+                launch->retained_buffers[launch->retained_buffer_count++] = buffer;
+            }
+            for (uint32_t j = 0; j < node->as.mpsgraph.target_count; ++j) {
+                mg_buffer_t *buffer = node->as.mpsgraph.targets[j].buffer;
+                mg_buffer_retain(buffer);
+                launch->retained_buffers[launch->retained_buffer_count++] = buffer;
+            }
+            [commandBuffer commit];
+            mg_status_t retain_status =
+                mg_launch_retain_command_buffer(launch, commandBuffer, out_error);
+            if (retain_status != MG_STATUS_OK) {
+                mgLaunchDestroy(launch);
+                return retain_status;
+            }
+            commandBuffer = [queue commandBuffer];
+            if (!commandBuffer) {
+                mgLaunchDestroy(launch);
+                return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE,
+                                    node->as.mpsgraph.id, "failed to create Metal command buffer",
+                                    NULL);
+            }
+            commandBufferHasWork = false;
+            break;
+        }
         default:
             if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE) {
                 break;
@@ -928,6 +1254,7 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
                 mg_buffer_retain(node->as.workspace_fill.dst);
                 launch->retained_buffers[launch->retained_buffer_count++] =
                     node->as.workspace_fill.dst;
+                commandBufferHasWork = true;
                 break;
             }
             mgLaunchDestroy(launch);
@@ -936,7 +1263,15 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
         }
     }
 
-    [commandBuffer commit];
+    if (commandBufferHasWork) {
+        [commandBuffer commit];
+        mg_status_t retain_status =
+            mg_launch_retain_command_buffer(launch, commandBuffer, out_error);
+        if (retain_status != MG_STATUS_OK) {
+            mgLaunchDestroy(launch);
+            return retain_status;
+        }
+    }
     exec->in_flight_count++;
     launch->exec = exec;
     *out_launch = launch;
@@ -945,26 +1280,28 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
 
 mg_status_t mgLaunchSynchronize(mg_launch_t *launch, mg_error_t **out_error) {
     mg_clear_error(out_error);
-    if (!launch || !launch->impl) {
+    if (!launch || launch->impl_count == 0) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_SYNC,
                             MG_NODE_ID_INVALID, "launch is required", NULL);
     }
 
-    id<MTLCommandBuffer> commandBuffer = (__bridge id<MTLCommandBuffer>)launch->impl;
-    [commandBuffer waitUntilCompleted];
+    mg_status_t status = MG_STATUS_OK;
+    for (size_t i = 0; i < launch->impl_count; ++i) {
+        id<MTLCommandBuffer> commandBuffer = (__bridge id<MTLCommandBuffer>)launch->impls[i];
+        [commandBuffer waitUntilCompleted];
+        if (commandBuffer.status == MTLCommandBufferStatusError && status == MG_STATUS_OK) {
+            status = mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_COMPLETE,
+                                  MG_NODE_ID_INVALID, "Metal command buffer failed",
+                                  mg_ns_error_message(commandBuffer.error));
+        }
+    }
     if (!launch->completed) {
         if (launch->exec && launch->exec->in_flight_count > 0) {
             launch->exec->in_flight_count--;
         }
         launch->completed = true;
     }
-    if (commandBuffer.status == MTLCommandBufferStatusError) {
-        return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_COMPLETE,
-                            MG_NODE_ID_INVALID, "Metal command buffer failed",
-                            mg_ns_error_message(commandBuffer.error));
-    }
-
-    return MG_STATUS_OK;
+    return status;
 }
 
 void mg_backend_launch_destroy(mg_launch_t *launch) {
@@ -979,11 +1316,12 @@ void mg_backend_launch_destroy(mg_launch_t *launch) {
         mg_event_release(launch->retained_events[i]);
     }
 
-    if (launch->impl) {
-        id commandBuffer = (__bridge_transfer id)launch->impl;
+    for (size_t i = 0; i < launch->impl_count; ++i) {
+        id commandBuffer = (__bridge_transfer id)launch->impls[i];
         (void)commandBuffer;
-        launch->impl = NULL;
     }
+    launch->impl = NULL;
+    launch->impl_count = 0;
     if (launch->retained_workspace_impl) {
         id workspace = (__bridge_transfer id)launch->retained_workspace_impl;
         (void)workspace;
@@ -997,6 +1335,7 @@ void mgLaunchDestroy(mg_launch_t *launch) {
     }
 
     mg_backend_launch_destroy(launch);
+    free(launch->impls);
     free(launch->retained_buffers);
     free(launch->retained_events);
     free(launch);
