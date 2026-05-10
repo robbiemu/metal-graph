@@ -53,6 +53,125 @@ static bool mg_range_valid(size_t length, size_t offset, size_t byte_count) {
     return byte_count > 0 && offset <= length && byte_count <= length - offset;
 }
 
+const mg_buffer_binding_t *mg_dispatch_find_buffer_binding(const mg_buffer_binding_t *bindings,
+                                                           uint32_t binding_count, uint32_t index) {
+    for (uint32_t i = 0; i < binding_count; ++i) {
+        if (bindings[i].index == index) {
+            return &bindings[i];
+        }
+    }
+    return NULL;
+}
+
+const mg_dispatch_resource_desc_t *
+mg_dispatch_find_resource(const mg_dispatch_resource_desc_t *resources, uint32_t resource_count,
+                          uint32_t index) {
+    for (uint32_t i = 0; i < resource_count; ++i) {
+        if (resources[i].index == index) {
+            return &resources[i];
+        }
+    }
+    return NULL;
+}
+
+bool mg_dispatch_resource_range_valid(const mg_dispatch_resource_desc_t *resource,
+                                      size_t buffer_length, size_t binding_offset) {
+    if (!resource) {
+        return binding_offset <= buffer_length;
+    }
+    if (resource->byte_offset > SIZE_MAX - binding_offset) {
+        return false;
+    }
+    size_t absolute_offset = binding_offset + resource->byte_offset;
+    if (resource->byte_count == 0) {
+        return absolute_offset <= buffer_length;
+    }
+    return mg_range_valid(buffer_length, absolute_offset, resource->byte_count);
+}
+
+bool mg_dispatch_resource_offset_aligned(const mg_dispatch_resource_desc_t *resource,
+                                         size_t binding_offset) {
+    if (!resource) {
+        return true;
+    }
+    size_t alignment = resource->alignment ? resource->alignment : 1;
+    if (resource->byte_offset > SIZE_MAX - binding_offset) {
+        return false;
+    }
+    return ((binding_offset + resource->byte_offset) % alignment) == 0;
+}
+
+static bool mg_resource_access_valid(mg_resource_access_t access) {
+    return access == MG_RESOURCE_ACCESS_UNKNOWN || access == MG_RESOURCE_ACCESS_READ ||
+           access == MG_RESOURCE_ACCESS_WRITE || access == MG_RESOURCE_ACCESS_READ_WRITE;
+}
+
+static mg_status_t mg_validate_dispatch_resource_desc(const mg_dispatch_resource_desc_t *resource,
+                                                      const mg_buffer_binding_t *bindings,
+                                                      uint32_t binding_count,
+                                                      mg_error_t **out_error) {
+    if (!resource || resource->size < sizeof(*resource) ||
+        !mg_resource_access_valid(resource->access) ||
+        !mg_alignment_valid(resource->alignment ? resource->alignment : 1)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "dispatch resource descriptor is invalid", NULL);
+    }
+
+    const mg_buffer_binding_t *binding =
+        mg_dispatch_find_buffer_binding(bindings, binding_count, resource->index);
+    if (!binding) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID,
+                            "dispatch resource descriptor references a missing binding", NULL);
+    }
+    if (!mg_dispatch_resource_offset_aligned(resource, binding->offset) ||
+        !mg_dispatch_resource_range_valid(resource, binding->buffer->length, binding->offset)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "dispatch resource range is invalid", NULL);
+    }
+
+    return MG_STATUS_OK;
+}
+
+static mg_status_t mg_validate_dispatch_resources(const mg_dispatch_resource_desc_t *resources,
+                                                  uint32_t resource_count,
+                                                  const mg_buffer_binding_t *bindings,
+                                                  uint32_t binding_count, mg_error_t **out_error) {
+    if (resource_count > 0 && !resources) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "dispatch resource descriptors are required", NULL);
+    }
+
+    for (uint32_t i = 0; i < resource_count; ++i) {
+        for (uint32_t j = i + 1; j < resource_count; ++j) {
+            if (resources[i].index == resources[j].index) {
+                return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                                    MG_NODE_ID_INVALID, "duplicate dispatch resource descriptor",
+                                    NULL);
+            }
+        }
+
+        mg_status_t status =
+            mg_validate_dispatch_resource_desc(&resources[i], bindings, binding_count, out_error);
+        if (status != MG_STATUS_OK) {
+            return status;
+        }
+    }
+
+    return MG_STATUS_OK;
+}
+
+static bool mg_dispatch_all_bindings_have_range_requirements(const mg_dispatch_node_t *dispatch) {
+    for (uint32_t i = 0; i < dispatch->buffer_count; ++i) {
+        const mg_dispatch_resource_desc_t *resource = mg_dispatch_find_resource(
+            dispatch->resources, dispatch->resource_count, dispatch->buffers[i].index);
+        if (!resource || resource->byte_count == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool mg_patch_flags_allowed(mg_node_kind_t kind, mg_patch_flags_t flags) {
     mg_patch_flags_t allowed = 0;
     switch (kind) {
@@ -117,6 +236,7 @@ void mg_dispatch_node_clear(mg_dispatch_node_t *dispatch) {
     free(dispatch->kernel_name);
     free(dispatch->buffers);
     free(dispatch->scalars);
+    free(dispatch->resources);
     memset(dispatch, 0, sizeof(*dispatch));
 }
 
@@ -221,6 +341,11 @@ mg_status_t mgGraphSetNodePatchFlags(mg_graph_t *graph, mg_node_t *node, mg_patc
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE, node->id,
                             "patch flags are not compatible with node kind", NULL);
     }
+    if (node->kind == MG_NODE_DISPATCH && (flags & MG_PATCH_DISPATCH_BUFFER) &&
+        !mg_dispatch_all_bindings_have_range_requirements(&node->as.dispatch)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE, node->id,
+                            "patchable dispatch buffers require resource range descriptors", NULL);
+    }
 
     node->patch_flags = flags;
     return MG_STATUS_OK;
@@ -242,9 +367,12 @@ mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
                             MG_NODE_ID_INVALID, "dispatch descriptor size is invalid", NULL);
     }
-    bool has_phase3_fields = desc->size >= sizeof(*desc);
+    bool has_phase3_fields = desc->size >= offsetof(mg_dispatch_desc_t, resources);
+    bool has_phase4_fields = desc->size >= sizeof(*desc);
     const mg_scalar_binding_t *scalars = has_phase3_fields ? desc->scalars : NULL;
     uint32_t scalar_count = has_phase3_fields ? desc->scalar_count : 0;
+    const mg_dispatch_resource_desc_t *resources = has_phase4_fields ? desc->resources : NULL;
+    uint32_t resource_count = has_phase4_fields ? desc->resource_count : 0;
 
     if (!desc->metallib_path || !desc->kernel_name || !mg_dims_valid(desc->grid_size) ||
         !mg_dims_valid(desc->threads_per_threadgroup)) {
@@ -306,6 +434,13 @@ mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *
                                 MG_NODE_ID_INVALID, "dispatch scalar binding is invalid", NULL);
         }
     }
+    status = mg_validate_dispatch_resources(resources, resource_count, desc->buffers,
+                                            desc->buffer_count, out_error);
+    if (status != MG_STATUS_OK) {
+        mg_node_clear(node);
+        free(node);
+        return status;
+    }
     for (uint32_t axis = 0; axis < 3; ++axis) {
         if (node->as.dispatch.grid_size[axis] > node->as.dispatch.max_grid_size[axis]) {
             mg_node_clear(node);
@@ -353,6 +488,23 @@ mg_status_t mgGraphAddDispatchNode(mg_graph_t *graph, const mg_dispatch_desc_t *
                 data,
                 scalars[i].byte_count,
             };
+        }
+    }
+    if (resource_count > 0) {
+        size_t bytes = sizeof(*node->as.dispatch.resources) * resource_count;
+        node->as.dispatch.resources = (mg_dispatch_resource_desc_t *)malloc(bytes);
+        if (!node->as.dispatch.resources) {
+            mg_node_clear(node);
+            free(node);
+            return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
+        }
+
+        memcpy(node->as.dispatch.resources, resources, bytes);
+        node->as.dispatch.resource_count = resource_count;
+        for (uint32_t i = 0; i < resource_count; ++i) {
+            if (node->as.dispatch.resources[i].alignment == 0) {
+                node->as.dispatch.resources[i].alignment = 1;
+            }
         }
     }
 

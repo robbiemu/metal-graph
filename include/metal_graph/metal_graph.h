@@ -84,6 +84,31 @@ typedef struct mg_buffer_binding {
     size_t offset;
 } mg_buffer_binding_t;
 
+typedef enum mg_resource_access {
+    MG_RESOURCE_ACCESS_UNKNOWN = 0,
+    MG_RESOURCE_ACCESS_READ = 1,
+    MG_RESOURCE_ACCESS_WRITE = 2,
+    MG_RESOURCE_ACCESS_READ_WRITE = 3
+} mg_resource_access_t;
+
+/*
+ * Dispatch resource contract metadata for one buffer binding index.
+ *
+ * This is separate from mg_buffer_binding_t: bindings provide the concrete buffer and base offset,
+ * while resource contracts describe the shader-visible range and access pattern. byte_offset is
+ * relative to the binding offset. byte_count may be zero only for unknown range metadata; patchable
+ * dispatch buffer bindings require a nonzero byte_count for range-complete validation. alignment
+ * is optional and defaults to 1 when zero.
+ */
+typedef struct mg_dispatch_resource_desc {
+    size_t size;
+    uint32_t index;
+    mg_resource_access_t access;
+    size_t byte_offset;
+    size_t byte_count;
+    size_t alignment;
+} mg_dispatch_resource_desc_t;
+
 /* Small dispatch scalar copied into graph construction and exec state. */
 typedef struct mg_scalar_binding {
     uint32_t index;
@@ -92,6 +117,7 @@ typedef struct mg_scalar_binding {
 } mg_scalar_binding_t;
 
 typedef uint64_t mg_patch_flags_t;
+typedef uint64_t mg_optimization_flags_t;
 
 #define MG_PATCH_DISPATCH_GRID ((mg_patch_flags_t)1u << 0)
 #define MG_PATCH_DISPATCH_BUFFER ((mg_patch_flags_t)1u << 1)
@@ -102,6 +128,28 @@ typedef uint64_t mg_patch_flags_t;
 #define MG_PATCH_FILL_RANGE ((mg_patch_flags_t)1u << 6)
 #define MG_PATCH_FILL_VALUE ((mg_patch_flags_t)1u << 7)
 #define MG_PATCH_EVENT_VALUE ((mg_patch_flags_t)1u << 8)
+
+#define MG_OPTIMIZATION_ICB ((mg_optimization_flags_t)1u << 0)
+
+typedef enum mg_icb_fallback_reason {
+    MG_ICB_FALLBACK_NONE = 0,
+    MG_ICB_FALLBACK_DISABLED = 1,
+    MG_ICB_FALLBACK_UNSUPPORTED = 2,
+    MG_ICB_FALLBACK_INELIGIBLE_NODE = 3,
+    MG_ICB_FALLBACK_UNKNOWN_RESOURCE_ACCESS = 4,
+    MG_ICB_FALLBACK_PATCHABLE_FIELD = 5,
+    MG_ICB_FALLBACK_BACKEND_ERROR = 6
+} mg_icb_fallback_reason_t;
+
+typedef struct mg_graph_exec_diagnostics {
+    size_t size;
+    uint32_t icb_available;
+    uint32_t icb_enabled;
+    uint32_t icb_groups_planned;
+    uint32_t icb_groups_used;
+    uint32_t icb_groups_fallback;
+    mg_icb_fallback_reason_t icb_last_fallback_reason;
+} mg_graph_exec_diagnostics_t;
 
 typedef struct mg_dispatch_desc {
     size_t size;
@@ -118,6 +166,12 @@ typedef struct mg_dispatch_desc {
     const mg_scalar_binding_t *scalars;
     uint32_t scalar_count;
     uint32_t max_grid_size[3];
+    /*
+     * Phase 4 resource contracts are copied by value. They are keyed by buffer binding index and
+     * drive range-complete dispatch buffer patch validation and conservative ICB eligibility.
+     */
+    const mg_dispatch_resource_desc_t *resources;
+    uint32_t resource_count;
 } mg_dispatch_desc_t;
 
 /*
@@ -296,6 +350,18 @@ MG_API mg_status_t mgGraphExecPatchFillNode(mg_graph_exec_t *exec, mg_node_id_t 
                                             const mg_fill_desc_t *desc, mg_error_t **out_error);
 MG_API mg_status_t mgGraphExecPatchEventValue(mg_graph_exec_t *exec, mg_node_id_t node_id,
                                               uint64_t value, mg_error_t **out_error);
+
+/*
+ * Optional execution optimizations. MG_OPTIMIZATION_ICB enables internal ICB use when supported
+ * and eligible. Disabling or unsupported optimization paths fall back to direct encoding without
+ * changing public behavior. Optimization flags are exec-local and affect future launches only.
+ */
+MG_API mg_status_t mgGraphExecSetOptimizationFlags(mg_graph_exec_t *exec,
+                                                   mg_optimization_flags_t flags,
+                                                   mg_error_t **out_error);
+MG_API mg_status_t mgGraphExecGetDiagnostics(const mg_graph_exec_t *exec,
+                                             mg_graph_exec_diagnostics_t *out_diagnostics,
+                                             mg_error_t **out_error);
 
 /* Launches create fresh command buffers. Launch handles are destroyed with mgLaunchDestroy. */
 MG_API mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream,

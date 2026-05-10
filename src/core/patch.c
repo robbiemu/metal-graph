@@ -146,10 +146,26 @@ mg_status_t mgGraphExecPatchDispatchBuffer(mg_graph_exec_t *exec, mg_node_id_t n
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_PATCH, node_id,
                             "dispatch buffer patch is invalid", NULL);
     }
+    if (exec->device_impl && buffer->device_impl && exec->device_impl != buffer->device_impl) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_PATCH, node_id,
+                            "dispatch buffer belongs to a different device", NULL);
+    }
 
     for (uint32_t i = 0; i < dispatch->buffer_count; ++i) {
         if (dispatch->buffers[i].index != index) {
             continue;
+        }
+        const mg_dispatch_resource_desc_t *resource =
+            mg_dispatch_find_resource(dispatch->resources, dispatch->resource_count, index);
+        if (!resource || resource->byte_count == 0) {
+            return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_PATCH,
+                                node_id, "dispatch buffer patch requires a declared resource range",
+                                NULL);
+        }
+        if (!mg_dispatch_resource_offset_aligned(resource, offset) ||
+            !mg_dispatch_resource_range_valid(resource, buffer->length, offset)) {
+            return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_PATCH,
+                                node_id, "dispatch buffer patch range is incompatible", NULL);
         }
         mg_buffer_retain(buffer);
         mg_buffer_release(dispatch->buffers[i].buffer);
@@ -339,5 +355,41 @@ mg_status_t mgGraphExecPatchEventValue(mg_graph_exec_t *exec, mg_node_id_t node_
     }
 
     event->value = value;
+    return MG_STATUS_OK;
+}
+
+mg_status_t mgGraphExecSetOptimizationFlags(mg_graph_exec_t *exec, mg_optimization_flags_t flags,
+                                            mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    mg_status_t status = mg_patch_ready(exec, out_error);
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+    if (flags & ~MG_OPTIMIZATION_ICB) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_PATCH,
+                            MG_NODE_ID_INVALID, "optimization flags are invalid", NULL);
+    }
+
+    exec->icb.enabled_flags = flags;
+    return MG_STATUS_OK;
+}
+
+mg_status_t mgGraphExecGetDiagnostics(const mg_graph_exec_t *exec,
+                                      mg_graph_exec_diagnostics_t *out_diagnostics,
+                                      mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (!exec || !out_diagnostics || out_diagnostics->size < sizeof(*out_diagnostics)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_PATCH,
+                            MG_NODE_ID_INVALID, "exec and diagnostics are required", NULL);
+    }
+
+    memset(out_diagnostics, 0, sizeof(*out_diagnostics));
+    out_diagnostics->size = sizeof(*out_diagnostics);
+    out_diagnostics->icb_available = exec->icb.available;
+    out_diagnostics->icb_enabled = (exec->icb.enabled_flags & MG_OPTIMIZATION_ICB) ? 1u : 0u;
+    out_diagnostics->icb_groups_planned = exec->icb.groups_planned;
+    out_diagnostics->icb_groups_used = exec->icb.groups_used;
+    out_diagnostics->icb_groups_fallback = exec->icb.groups_fallback;
+    out_diagnostics->icb_last_fallback_reason = exec->icb.last_fallback_reason;
     return MG_STATUS_OK;
 }

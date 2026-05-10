@@ -25,6 +25,8 @@ typedef struct mg_dispatch_node {
     uint32_t buffer_count;
     mg_scalar_binding_t *scalars;
     uint32_t scalar_count;
+    mg_dispatch_resource_desc_t *resources;
+    uint32_t resource_count;
 } mg_dispatch_node_t;
 
 typedef struct mg_copy_node {
@@ -86,6 +88,7 @@ struct mg_stream {
 
 struct mg_buffer {
     void *impl;
+    void *device_impl;
     size_t length;
     uint32_t ref_count;
 };
@@ -139,6 +142,8 @@ typedef struct mg_exec_dispatch {
     uint32_t buffer_count;
     mg_scalar_binding_t *scalars;
     uint32_t scalar_count;
+    mg_dispatch_resource_desc_t *resources;
+    uint32_t resource_count;
     void *pipeline_impl;
 } mg_exec_dispatch_t;
 
@@ -214,11 +219,23 @@ typedef struct mg_workspace_plan {
     void *backend_impl;
 } mg_workspace_plan_t;
 
+typedef struct mg_icb_plan {
+    mg_optimization_flags_t enabled_flags;
+    uint32_t available;
+    uint32_t groups_planned;
+    uint32_t groups_used;
+    uint32_t groups_fallback;
+    mg_icb_fallback_reason_t last_fallback_reason;
+    void *backend_impl;
+    size_t command_count;
+} mg_icb_plan_t;
+
 struct mg_graph_exec {
     mg_exec_node_t *nodes;
     size_t node_count;
     void *device_impl;
     mg_workspace_plan_t workspace;
+    mg_icb_plan_t icb;
     uint32_t in_flight_count;
 };
 
@@ -243,6 +260,15 @@ void mg_dispatch_node_clear(mg_dispatch_node_t *dispatch);
 void mg_node_clear(mg_node_t *node);
 mg_status_t mg_graph_topological_order(const mg_graph_t *graph, size_t *order,
                                        mg_error_t **out_error);
+const mg_buffer_binding_t *mg_dispatch_find_buffer_binding(const mg_buffer_binding_t *bindings,
+                                                           uint32_t binding_count, uint32_t index);
+const mg_dispatch_resource_desc_t *
+mg_dispatch_find_resource(const mg_dispatch_resource_desc_t *resources, uint32_t resource_count,
+                          uint32_t index);
+bool mg_dispatch_resource_range_valid(const mg_dispatch_resource_desc_t *resource,
+                                      size_t buffer_length, size_t binding_offset);
+bool mg_dispatch_resource_offset_aligned(const mg_dispatch_resource_desc_t *resource,
+                                         size_t binding_offset);
 
 void mg_buffer_retain(mg_buffer_t *buffer);
 void mg_buffer_release(mg_buffer_t *buffer);
