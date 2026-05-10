@@ -41,6 +41,9 @@ Phase 0 must not expose Objective-C, Swift, C++ STL, Metal framework types, indi
 - Every fallible API returns `mg_status_t`.
 - Detailed diagnostics are returned through `mg_error_t`.
 - A graph with a cycle must fail validation with `MG_STATUS_INVALID_TOPOLOGY`.
+- Self-dependencies fail during dependency insertion with `MG_STATUS_INVALID_TOPOLOGY`.
+- Duplicate dependencies are accepted as idempotent no-ops.
+- Empty graphs are valid no-op graphs.
 - Instantiation freezes a snapshot of the graph.
 - A launch encodes a fresh `MTLCommandBuffer`.
 - Synchronization waits for completion and reports command buffer errors.

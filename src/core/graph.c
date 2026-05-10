@@ -153,7 +153,15 @@ mg_status_t mg_graph_add_dispatch_node(mg_graph_t *graph, const mg_dispatch_desc
         return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
     }
 
-    node->dispatch.buffer_count = desc->buffer_count;
+    for (uint32_t i = 0; i < desc->buffer_count; ++i) {
+        if (!desc->buffers[i].buffer || desc->buffers[i].offset > desc->buffers[i].buffer->length) {
+            mg_dispatch_node_clear(&node->dispatch);
+            free(node);
+            return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                                MG_NODE_ID_INVALID, "dispatch buffer binding is invalid", NULL);
+        }
+    }
+
     if (desc->buffer_count > 0) {
         size_t bytes = sizeof(*node->dispatch.buffers) * desc->buffer_count;
         node->dispatch.buffers = (mg_buffer_binding_t *)malloc(bytes);
@@ -164,14 +172,8 @@ mg_status_t mg_graph_add_dispatch_node(mg_graph_t *graph, const mg_dispatch_desc
         }
 
         memcpy(node->dispatch.buffers, desc->buffers, bytes);
+        node->dispatch.buffer_count = desc->buffer_count;
         for (uint32_t i = 0; i < desc->buffer_count; ++i) {
-            if (!node->dispatch.buffers[i].buffer ||
-                node->dispatch.buffers[i].offset > node->dispatch.buffers[i].buffer->length) {
-                mg_dispatch_node_clear(&node->dispatch);
-                free(node);
-                return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
-                                    MG_NODE_ID_INVALID, "dispatch buffer binding is invalid", NULL);
-            }
             mg_buffer_retain(node->dispatch.buffers[i].buffer);
         }
     }
@@ -191,6 +193,17 @@ mg_status_t mg_graph_add_dependency(mg_graph_t *graph, mg_node_t *before, mg_nod
                             MG_NODE_ID_INVALID, "dependency nodes must belong to graph", NULL);
     }
 
+    if (before == after) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_TOPOLOGY, MG_ERROR_STAGE_CREATE,
+                            before->id, "self-dependencies are not allowed", NULL);
+    }
+
+    for (size_t i = 0; i < graph->edge_count; ++i) {
+        if (graph->edges[i].before == before->index && graph->edges[i].after == after->index) {
+            return MG_STATUS_OK;
+        }
+    }
+
     mg_status_t status = mg_graph_reserve_edges(graph, graph->edge_count + 1, out_error);
     if (status != MG_STATUS_OK) {
         return status;
@@ -208,6 +221,10 @@ mg_status_t mg_graph_topological_order(const mg_graph_t *graph, size_t *order,
     if (!graph || (graph->node_count > 0 && !order)) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_VALIDATE,
                             MG_NODE_ID_INVALID, "graph and order are required", NULL);
+    }
+
+    if (graph->node_count == 0) {
+        return MG_STATUS_OK;
     }
 
     size_t *indegree = (size_t *)calloc(graph->node_count, sizeof(*indegree));

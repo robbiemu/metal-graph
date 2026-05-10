@@ -6,41 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-@interface MGMetalDeviceBox : NSObject
-@property(nonatomic, strong) id<MTLDevice> device;
-@end
-
-@implementation MGMetalDeviceBox
-@end
-
-@interface MGMetalStreamBox : NSObject
-@property(nonatomic, strong) id<MTLCommandQueue> queue;
-@end
-
-@implementation MGMetalStreamBox
-@end
-
-@interface MGMetalBufferBox : NSObject
-@property(nonatomic, strong) id<MTLBuffer> buffer;
-@end
-
-@implementation MGMetalBufferBox
-@end
-
-@interface MGMetalPipelineBox : NSObject
-@property(nonatomic, strong) id<MTLComputePipelineState> pipeline;
-@end
-
-@implementation MGMetalPipelineBox
-@end
-
-@interface MGMetalLaunchBox : NSObject
-@property(nonatomic, strong) id<MTLCommandBuffer> commandBuffer;
-@end
-
-@implementation MGMetalLaunchBox
-@end
-
 static NSString *mg_string(const char *value) {
     return value ? [NSString stringWithUTF8String:value] : nil;
 }
@@ -61,20 +26,20 @@ static mg_status_t mg_clone_dispatch(const mg_node_t *node, mg_exec_dispatch_t *
     memcpy(out_dispatch->grid_size, node->dispatch.grid_size, sizeof(out_dispatch->grid_size));
     memcpy(out_dispatch->threads_per_threadgroup, node->dispatch.threads_per_threadgroup,
            sizeof(out_dispatch->threads_per_threadgroup));
-    out_dispatch->buffer_count = node->dispatch.buffer_count;
 
     if (!out_dispatch->metallib_path || !out_dispatch->kernel_name) {
         return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
     }
 
-    if (out_dispatch->buffer_count > 0) {
-        size_t bytes = sizeof(*out_dispatch->buffers) * out_dispatch->buffer_count;
+    if (node->dispatch.buffer_count > 0) {
+        size_t bytes = sizeof(*out_dispatch->buffers) * node->dispatch.buffer_count;
         out_dispatch->buffers = (mg_buffer_binding_t *)malloc(bytes);
         if (!out_dispatch->buffers) {
             return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
         }
 
         memcpy(out_dispatch->buffers, node->dispatch.buffers, bytes);
+        out_dispatch->buffer_count = node->dispatch.buffer_count;
         for (uint32_t i = 0; i < out_dispatch->buffer_count; ++i) {
             mg_buffer_retain(out_dispatch->buffers[i].buffer);
         }
@@ -93,8 +58,8 @@ static void mg_exec_dispatch_clear(mg_exec_dispatch_t *dispatch) {
     }
 
     if (dispatch->pipeline_impl) {
-        MGMetalPipelineBox *box = (__bridge_transfer MGMetalPipelineBox *)dispatch->pipeline_impl;
-        (void)box;
+        id pipeline = (__bridge_transfer id)dispatch->pipeline_impl;
+        (void)pipeline;
     }
 
     free(dispatch->metallib_path);
@@ -123,9 +88,7 @@ mg_status_t mg_device_create_system_default(mg_device_t **out_device, mg_error_t
         return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
     }
 
-    MGMetalDeviceBox *box = [MGMetalDeviceBox new];
-    box.device = metalDevice;
-    device->impl = (__bridge_retained void *)box;
+    device->impl = (__bridge_retained void *)metalDevice;
     *out_device = device;
     return MG_STATUS_OK;
 }
@@ -135,8 +98,8 @@ void mg_backend_device_destroy(mg_device_t *device) {
         return;
     }
 
-    MGMetalDeviceBox *box = (__bridge_transfer MGMetalDeviceBox *)device->impl;
-    (void)box;
+    id deviceObject = (__bridge_transfer id)device->impl;
+    (void)deviceObject;
     device->impl = NULL;
 }
 
@@ -158,8 +121,8 @@ mg_status_t mg_stream_create(mg_device_t *device, mg_stream_t **out_stream,
     }
 
     *out_stream = NULL;
-    MGMetalDeviceBox *deviceBox = (__bridge MGMetalDeviceBox *)device->impl;
-    id<MTLCommandQueue> queue = [deviceBox.device newCommandQueue];
+    id<MTLDevice> metalDevice = (__bridge id<MTLDevice>)device->impl;
+    id<MTLCommandQueue> queue = [metalDevice newCommandQueue];
     if (!queue) {
         return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_CREATE,
                             MG_NODE_ID_INVALID, "failed to create Metal command queue", NULL);
@@ -170,9 +133,7 @@ mg_status_t mg_stream_create(mg_device_t *device, mg_stream_t **out_stream,
         return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
     }
 
-    MGMetalStreamBox *box = [MGMetalStreamBox new];
-    box.queue = queue;
-    stream->impl = (__bridge_retained void *)box;
+    stream->impl = (__bridge_retained void *)queue;
     *out_stream = stream;
     return MG_STATUS_OK;
 }
@@ -182,8 +143,8 @@ void mg_backend_stream_destroy(mg_stream_t *stream) {
         return;
     }
 
-    MGMetalStreamBox *box = (__bridge_transfer MGMetalStreamBox *)stream->impl;
-    (void)box;
+    id queueObject = (__bridge_transfer id)stream->impl;
+    (void)queueObject;
     stream->impl = NULL;
 }
 
@@ -206,9 +167,9 @@ mg_status_t mg_buffer_create_shared(mg_device_t *device, size_t length, mg_buffe
     }
 
     *out_buffer = NULL;
-    MGMetalDeviceBox *deviceBox = (__bridge MGMetalDeviceBox *)device->impl;
-    id<MTLBuffer> metalBuffer = [deviceBox.device newBufferWithLength:length
-                                                              options:MTLResourceStorageModeShared];
+    id<MTLDevice> metalDevice = (__bridge id<MTLDevice>)device->impl;
+    id<MTLBuffer> metalBuffer = [metalDevice newBufferWithLength:length
+                                                         options:MTLResourceStorageModeShared];
     if (!metalBuffer) {
         return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_CREATE,
                             MG_NODE_ID_INVALID, "failed to create Metal buffer", NULL);
@@ -219,9 +180,7 @@ mg_status_t mg_buffer_create_shared(mg_device_t *device, size_t length, mg_buffe
         return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
     }
 
-    MGMetalBufferBox *box = [MGMetalBufferBox new];
-    box.buffer = metalBuffer;
-    buffer->impl = (__bridge_retained void *)box;
+    buffer->impl = (__bridge_retained void *)metalBuffer;
     buffer->length = length;
     buffer->ref_count = 1;
     *out_buffer = buffer;
@@ -233,8 +192,8 @@ void mg_backend_buffer_destroy(mg_buffer_t *buffer) {
         return;
     }
 
-    MGMetalBufferBox *box = (__bridge_transfer MGMetalBufferBox *)buffer->impl;
-    (void)box;
+    id bufferObject = (__bridge_transfer id)buffer->impl;
+    (void)bufferObject;
     buffer->impl = NULL;
 }
 
@@ -243,8 +202,8 @@ void *mg_backend_buffer_contents(mg_buffer_t *buffer) {
         return NULL;
     }
 
-    MGMetalBufferBox *box = (__bridge MGMetalBufferBox *)buffer->impl;
-    return [box.buffer contents];
+    id<MTLBuffer> metalBuffer = (__bridge id<MTLBuffer>)buffer->impl;
+    return [metalBuffer contents];
 }
 
 mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_exec_t **out_exec,
@@ -291,8 +250,8 @@ mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_grap
         }
     }
 
-    MGMetalDeviceBox *deviceBox = (__bridge MGMetalDeviceBox *)device->impl;
-    exec->device_impl = (__bridge_retained void *)deviceBox;
+    id<MTLDevice> metalDevice = (__bridge id<MTLDevice>)device->impl;
+    exec->device_impl = (__bridge_retained void *)metalDevice;
 
     for (size_t i = 0; i < exec->dispatch_count; ++i) {
         mg_node_t *node = graph->nodes[order[i]];
@@ -306,7 +265,7 @@ mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_grap
         NSString *path = mg_string(exec->dispatches[i].metallib_path);
         NSURL *url = [NSURL fileURLWithPath:path];
         NSError *libraryError = nil;
-        id<MTLLibrary> library = [deviceBox.device newLibraryWithURL:url error:&libraryError];
+        id<MTLLibrary> library = [metalDevice newLibraryWithURL:url error:&libraryError];
         if (!library) {
             free(order);
             mg_status_t errorStatus = mg_set_error(
@@ -329,7 +288,7 @@ mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_grap
 
         NSError *pipelineError = nil;
         id<MTLComputePipelineState> pipeline =
-            [deviceBox.device newComputePipelineStateWithFunction:function error:&pipelineError];
+            [metalDevice newComputePipelineStateWithFunction:function error:&pipelineError];
         if (!pipeline) {
             free(order);
             mg_status_t errorStatus = mg_set_error(
@@ -339,9 +298,7 @@ mg_status_t mg_graph_instantiate(mg_graph_t *graph, mg_device_t *device, mg_grap
             return errorStatus;
         }
 
-        MGMetalPipelineBox *pipelineBox = [MGMetalPipelineBox new];
-        pipelineBox.pipeline = pipeline;
-        exec->dispatches[i].pipeline_impl = (__bridge_retained void *)pipelineBox;
+        exec->dispatches[i].pipeline_impl = (__bridge_retained void *)pipeline;
     }
 
     free(order);
@@ -359,8 +316,8 @@ void mg_backend_graph_exec_destroy(mg_graph_exec_t *exec) {
     }
 
     if (exec->device_impl) {
-        MGMetalDeviceBox *box = (__bridge_transfer MGMetalDeviceBox *)exec->device_impl;
-        (void)box;
+        id deviceObject = (__bridge_transfer id)exec->device_impl;
+        (void)deviceObject;
         exec->device_impl = NULL;
     }
 }
@@ -384,8 +341,8 @@ mg_status_t mg_graph_launch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launc
     }
 
     *out_launch = NULL;
-    MGMetalStreamBox *streamBox = (__bridge MGMetalStreamBox *)stream->impl;
-    id<MTLCommandBuffer> commandBuffer = [streamBox.queue commandBuffer];
+    id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)stream->impl;
+    id<MTLCommandBuffer> commandBuffer = [queue commandBuffer];
     if (!commandBuffer) {
         return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_ENCODE,
                             MG_NODE_ID_INVALID, "failed to create Metal command buffer", NULL);
@@ -410,9 +367,7 @@ mg_status_t mg_graph_launch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launc
         }
     }
 
-    MGMetalLaunchBox *launchBox = [MGMetalLaunchBox new];
-    launchBox.commandBuffer = commandBuffer;
-    launch->impl = (__bridge_retained void *)launchBox;
+    launch->impl = (__bridge_retained void *)commandBuffer;
 
     for (size_t i = 0; i < exec->dispatch_count; ++i) {
         mg_exec_dispatch_t *dispatch = &exec->dispatches[i];
@@ -423,12 +378,13 @@ mg_status_t mg_graph_launch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launc
                                 dispatch->id, "failed to create Metal compute encoder", NULL);
         }
 
-        MGMetalPipelineBox *pipelineBox = (__bridge MGMetalPipelineBox *)dispatch->pipeline_impl;
-        [encoder setComputePipelineState:pipelineBox.pipeline];
+        id<MTLComputePipelineState> pipeline =
+            (__bridge id<MTLComputePipelineState>)dispatch->pipeline_impl;
+        [encoder setComputePipelineState:pipeline];
         for (uint32_t j = 0; j < dispatch->buffer_count; ++j) {
             mg_buffer_t *buffer = dispatch->buffers[j].buffer;
-            MGMetalBufferBox *bufferBox = (__bridge MGMetalBufferBox *)buffer->impl;
-            [encoder setBuffer:bufferBox.buffer
+            id<MTLBuffer> metalBuffer = (__bridge id<MTLBuffer>)buffer->impl;
+            [encoder setBuffer:metalBuffer
                         offset:dispatch->buffers[j].offset
                        atIndex:dispatch->buffers[j].index];
             mg_buffer_retain(buffer);
@@ -456,12 +412,12 @@ mg_status_t mg_launch_synchronize(mg_launch_t *launch, mg_error_t **out_error) {
                             MG_NODE_ID_INVALID, "launch is required", NULL);
     }
 
-    MGMetalLaunchBox *launchBox = (__bridge MGMetalLaunchBox *)launch->impl;
-    [launchBox.commandBuffer waitUntilCompleted];
-    if (launchBox.commandBuffer.status == MTLCommandBufferStatusError) {
+    id<MTLCommandBuffer> commandBuffer = (__bridge id<MTLCommandBuffer>)launch->impl;
+    [commandBuffer waitUntilCompleted];
+    if (commandBuffer.status == MTLCommandBufferStatusError) {
         return mg_set_error(out_error, MG_STATUS_BACKEND_ERROR, MG_ERROR_STAGE_COMPLETE,
                             MG_NODE_ID_INVALID, "Metal command buffer failed",
-                            mg_ns_error_message(launchBox.commandBuffer.error));
+                            mg_ns_error_message(commandBuffer.error));
     }
 
     return MG_STATUS_OK;
@@ -477,8 +433,8 @@ void mg_backend_launch_destroy(mg_launch_t *launch) {
     }
 
     if (launch->impl) {
-        MGMetalLaunchBox *box = (__bridge_transfer MGMetalLaunchBox *)launch->impl;
-        (void)box;
+        id commandBuffer = (__bridge_transfer id)launch->impl;
+        (void)commandBuffer;
         launch->impl = NULL;
     }
 }

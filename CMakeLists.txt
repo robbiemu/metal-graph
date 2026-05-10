@@ -4,17 +4,23 @@ project(
   MetalGraph
   VERSION 0.1.0
   DESCRIPTION "Reusable explicit graph execution API over Apple Metal"
-  LANGUAGES C CXX OBJCXX
+  LANGUAGES C CXX
 )
 
 include(CTest)
+
+set(MG_BACKEND_SOURCE src/metal/unsupported_backend.c)
+if(APPLE)
+  enable_language(OBJCXX)
+  set(MG_BACKEND_SOURCE src/metal/metal_backend.mm)
+endif()
 
 add_library(metal_graph STATIC
   src/core/buffer.c
   src/core/error.c
   src/core/graph.c
   src/core/version.c
-  src/metal/metal_backend.mm
+  ${MG_BACKEND_SOURCE}
 )
 
 add_library(MetalGraph::metal_graph ALIAS metal_graph)
@@ -42,6 +48,10 @@ endif()
 set_target_properties(metal_graph PROPERTIES
   OUTPUT_NAME metal_graph
   PUBLIC_HEADER include/metal_graph/metal_graph.h
+  C_VISIBILITY_PRESET hidden
+  CXX_VISIBILITY_PRESET hidden
+  OBJCXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN YES
 )
 
 if(BUILD_TESTING)

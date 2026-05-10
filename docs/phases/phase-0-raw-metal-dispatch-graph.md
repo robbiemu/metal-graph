@@ -2,7 +2,7 @@
 
 Branch: `phase-0-raw-metal-dispatch-graph`
 
-Status: in implementation
+Status: implemented
 
 ## Scope
 
@@ -16,6 +16,8 @@ Status: in implementation
 - dispatch node creation
 - dependency insertion
 - topology validation
+- empty graph no-op behavior
+- duplicate dependency idempotence
 - graph instantiation
 - launch by freshly encoding `MTLCommandBuffer`
 - synchronization

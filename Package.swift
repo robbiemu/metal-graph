@@ -4,6 +4,9 @@ import PackageDescription
 
 let package = Package(
     name: "MetalGraph",
+    platforms: [
+        .macOS(.v14),
+    ],
     products: [
         .library(
             name: "MetalGraph",
@@ -24,6 +27,7 @@ let package = Package(
                 "build",
                 "docs",
                 "src/shaders",
+                "src/metal/unsupported_backend.c",
                 "tests",
             ],
             sources: ["src"],
