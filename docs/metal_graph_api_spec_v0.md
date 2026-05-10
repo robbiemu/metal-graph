@@ -325,3 +325,43 @@ scheduling, or new C ABI semantics.
 
 MPSGraph diagnostics remain limited to existing structured errors and ICB fallback diagnostics when
 MPSGraph participation affects ICB eligibility.
+
+## Phase 10 Direction
+
+Phase 10 adds the runtime foundation for external Metal storage wrapping. The core C header remains
+framework-neutral and adds only buffer-origin diagnostics:
+
+- `mg_buffer_origin_kind_t`;
+- `mg_buffer_origin_info_t`;
+- `mgBufferGetOriginInfo`.
+
+The Metal-specific entry point lives in `include/metal_graph/metal_graph_metal.h`, which may expose
+Objective-C Metal types:
+
+```text
+mgMetalBufferWrap(device, desc, out_buffer, out_error)
+```
+
+`mgMetalBufferWrap` wraps a caller-provided `id<MTLBuffer>` byte range as `mg_buffer_t` without
+copying. The wrapped buffer carries its backing byte offset, exposed byte length, origin kind,
+zero-copy/external flags, host-visible and mutable flags, and lifetime ownership hooks. Dispatch,
+copy, fill, GraphExec retention, and Launch retention use the wrapper as a normal `mg_buffer_t`
+while encoding the correct backing byte offset.
+
+External Metal wrapping reports:
+
+```text
+origin_kind = MG_BUFFER_ORIGIN_EXTERNAL_METAL
+is_zero_copy = true
+is_external = true
+source_framework = Metal
+```
+
+Library-created shared buffers continue to report as library-owned. Adapter copy paths must not
+report zero-copy.
+
+Phase 10 does not complete MLX zero-copy. MLX `mode="zero_copy"` may remain
+`unsupported_public_api` until Phase 11 can prove a supported MLX storage export path or supported
+shim that provides storage identity, byte range, device identity, lifetime, layout/dtype, and
+synchronization facts. Phase 10 also does not add hidden synchronization, MLX graph capture, Core ML
+or Metal ML inference nodes, or an ANE/Neural Accelerator optimization flag.

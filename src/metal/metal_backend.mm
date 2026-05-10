@@ -1,4 +1,5 @@
 #include "../core/internal.h"
+#include "metal_graph/metal_graph_metal.h"
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -18,6 +19,10 @@ static const char *mg_ns_error_message(NSError *error) {
         return NULL;
     }
     return [[error localizedDescription] UTF8String];
+}
+
+static size_t mg_metal_buffer_offset(const mg_buffer_t *buffer, size_t relative_offset) {
+    return buffer->byte_offset + relative_offset;
 }
 
 static mg_status_t mg_clone_dispatch(const mg_node_t *node, mg_exec_dispatch_t *out_dispatch,
@@ -577,7 +582,7 @@ static mg_status_t mg_icb_plan_build(mg_graph_exec_t *exec, id<MTLDevice> metalD
             mg_buffer_t *buffer = dispatch->buffers[j].buffer;
             id<MTLBuffer> metalBuffer = (__bridge id<MTLBuffer>)buffer->impl;
             [command setKernelBuffer:metalBuffer
-                              offset:dispatch->buffers[j].offset
+                              offset:mg_metal_buffer_offset(buffer, dispatch->buffers[j].offset)
                              atIndex:dispatch->buffers[j].index];
         }
 
@@ -710,6 +715,144 @@ mg_status_t mgBufferCreateShared(mg_device_t *device, size_t length, mg_buffer_t
     buffer->impl = (__bridge_retained void *)metalBuffer;
     buffer->device_impl = (__bridge void *)metalDevice;
     buffer->length = length;
+    buffer->origin_kind = MG_BUFFER_ORIGIN_LIBRARY_OWNED;
+    buffer->is_host_visible = 1;
+    buffer->is_mutable = 1;
+    buffer->retained_backend_impl = 1;
+    buffer->source_framework = mg_strdup("Metal Graph");
+    if (!buffer->source_framework) {
+        mg_backend_buffer_destroy(buffer);
+        free(buffer);
+        return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
+    }
+    buffer->ref_count = 1;
+    *out_buffer = buffer;
+    return MG_STATUS_OK;
+}
+
+static bool mg_metal_buffer_access_valid(mg_metal_buffer_access_t access) {
+    return access == MG_METAL_BUFFER_ACCESS_READ || access == MG_METAL_BUFFER_ACCESS_WRITE ||
+           access == MG_METAL_BUFFER_ACCESS_READ_WRITE;
+}
+
+static bool mg_metal_buffer_access_writes(mg_metal_buffer_access_t access) {
+    return access == MG_METAL_BUFFER_ACCESS_WRITE ||
+           access == MG_METAL_BUFFER_ACCESS_READ_WRITE;
+}
+
+mg_status_t mgMetalBufferWrap(mg_device_t *device, const mg_metal_buffer_wrap_desc_t *desc,
+                              mg_buffer_t **out_buffer, mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (out_buffer) {
+        *out_buffer = NULL;
+    }
+
+    if (!device || !device->impl || !desc || !out_buffer) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "device, desc, and out_buffer are required", NULL);
+    }
+    if (desc->size != sizeof(*desc)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "Metal buffer wrap descriptor size is invalid",
+                            NULL);
+    }
+    if (!desc->buffer) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "Metal buffer wrap requires a buffer", NULL);
+    }
+    if (desc->byte_length == 0 || desc->byte_offset > SIZE_MAX - desc->byte_length) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "Metal buffer wrap range is invalid", NULL);
+    }
+    if (!mg_metal_buffer_access_valid(desc->access)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "Metal buffer wrap access is invalid", NULL);
+    }
+
+    uint32_t valid_flags = MG_METAL_BUFFER_WRAP_RETAIN_BUFFER | MG_METAL_BUFFER_WRAP_RETAIN_OWNER |
+                           MG_METAL_BUFFER_WRAP_HOST_VISIBLE | MG_METAL_BUFFER_WRAP_MUTABLE;
+    if (desc->flags & ~valid_flags) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "Metal buffer wrap flags are invalid", NULL);
+    }
+    if (!(desc->flags & MG_METAL_BUFFER_WRAP_RETAIN_BUFFER) &&
+        !(desc->flags & MG_METAL_BUFFER_WRAP_RETAIN_OWNER)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID,
+                            "Metal buffer wrap requires retained buffer or owner lifetime", NULL);
+    }
+    bool retains_owner = (desc->flags & MG_METAL_BUFFER_WRAP_RETAIN_OWNER) != 0;
+    if (retains_owner &&
+        (!desc->owner_context || !desc->owner_retain || !desc->owner_release)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "Metal buffer wrap owner retention is invalid",
+                            NULL);
+    }
+    if (!retains_owner && (desc->owner_context || desc->owner_retain || desc->owner_release)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID,
+                            "Metal buffer wrap owner callbacks require RETAIN_OWNER", NULL);
+    }
+    bool mutable_requested = (desc->flags & MG_METAL_BUFFER_WRAP_MUTABLE) != 0;
+    if (mg_metal_buffer_access_writes(desc->access) && !mutable_requested) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID,
+                            "Metal buffer wrap write access requires MUTABLE flag", NULL);
+    }
+
+    id<MTLDevice> metalDevice = (__bridge id<MTLDevice>)device->impl;
+    id<MTLBuffer> metalBuffer = desc->buffer;
+    if (metalBuffer.device != metalDevice) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "Metal buffer belongs to a different device", NULL);
+    }
+    if (desc->byte_offset + desc->byte_length > [metalBuffer length]) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "Metal buffer wrap range exceeds buffer length",
+                            NULL);
+    }
+    bool host_visible = (desc->flags & MG_METAL_BUFFER_WRAP_HOST_VISIBLE) != 0;
+    if (host_visible && [metalBuffer contents] == NULL) {
+        return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID,
+                            "Metal buffer wrap requested host visibility for non-host-visible "
+                            "storage",
+                            NULL);
+    }
+
+    mg_buffer_t *buffer = (mg_buffer_t *)calloc(1, sizeof(*buffer));
+    if (!buffer) {
+        return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
+    }
+    buffer->source_framework = mg_strdup("Metal");
+    if (!buffer->source_framework) {
+        free(buffer);
+        return mg_set_oom(out_error, MG_ERROR_STAGE_CREATE);
+    }
+
+    if (desc->label) {
+        metalBuffer.label = [NSString stringWithUTF8String:desc->label];
+    }
+    if (retains_owner) {
+        desc->owner_retain(desc->owner_context);
+        buffer->owner_context = desc->owner_context;
+        buffer->owner_release = desc->owner_release;
+    }
+
+    if (desc->flags & MG_METAL_BUFFER_WRAP_RETAIN_BUFFER) {
+        buffer->impl = (__bridge_retained void *)metalBuffer;
+        buffer->retained_backend_impl = 1;
+    } else {
+        buffer->impl = (__bridge void *)metalBuffer;
+    }
+    buffer->device_impl = (__bridge void *)metalDevice;
+    buffer->length = desc->byte_length;
+    buffer->byte_offset = desc->byte_offset;
+    buffer->origin_kind = MG_BUFFER_ORIGIN_EXTERNAL_METAL;
+    buffer->is_zero_copy = 1;
+    buffer->is_external = 1;
+    buffer->is_host_visible = host_visible ? 1 : 0;
+    buffer->is_mutable = mutable_requested ? 1 : 0;
     buffer->ref_count = 1;
     *out_buffer = buffer;
     return MG_STATUS_OK;
@@ -720,8 +863,10 @@ void mg_backend_buffer_destroy(mg_buffer_t *buffer) {
         return;
     }
 
-    id bufferObject = (__bridge_transfer id)buffer->impl;
-    (void)bufferObject;
+    if (buffer->retained_backend_impl) {
+        id bufferObject = (__bridge_transfer id)buffer->impl;
+        (void)bufferObject;
+    }
     buffer->impl = NULL;
 }
 
@@ -772,7 +917,11 @@ void *mg_backend_buffer_contents(mg_buffer_t *buffer) {
     }
 
     id<MTLBuffer> metalBuffer = (__bridge id<MTLBuffer>)buffer->impl;
-    return [metalBuffer contents];
+    void *contents = [metalBuffer contents];
+    if (!contents) {
+        return NULL;
+    }
+    return (uint8_t *)contents + buffer->byte_offset;
 }
 
 mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_exec_t **out_exec,
@@ -1091,7 +1240,7 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
                 mg_buffer_t *buffer = dispatch->buffers[j].buffer;
                 id<MTLBuffer> metalBuffer = (__bridge id<MTLBuffer>)buffer->impl;
                 [encoder setBuffer:metalBuffer
-                            offset:dispatch->buffers[j].offset
+                            offset:mg_metal_buffer_offset(buffer, dispatch->buffers[j].offset)
                            atIndex:dispatch->buffers[j].index];
                 mg_buffer_retain(buffer);
                 launch->retained_buffers[launch->retained_buffer_count++] = buffer;
@@ -1122,9 +1271,11 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
             id<MTLBuffer> src = (__bridge id<MTLBuffer>)node->as.copy.src->impl;
             id<MTLBuffer> dst = (__bridge id<MTLBuffer>)node->as.copy.dst->impl;
             [encoder copyFromBuffer:src
-                       sourceOffset:node->as.copy.src_offset
+                       sourceOffset:mg_metal_buffer_offset(node->as.copy.src,
+                                                           node->as.copy.src_offset)
                            toBuffer:dst
-                  destinationOffset:node->as.copy.dst_offset
+                  destinationOffset:mg_metal_buffer_offset(node->as.copy.dst,
+                                                           node->as.copy.dst_offset)
                                size:node->as.copy.byte_count];
             [encoder endEncoding];
             mg_buffer_retain(node->as.copy.src);
@@ -1142,7 +1293,9 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
                                     node->as.fill.id, "failed to create Metal blit encoder", NULL);
             }
             id<MTLBuffer> dst = (__bridge id<MTLBuffer>)node->as.fill.dst->impl;
-            NSRange range = NSMakeRange(node->as.fill.dst_offset, node->as.fill.byte_count);
+            NSRange range =
+                NSMakeRange(mg_metal_buffer_offset(node->as.fill.dst, node->as.fill.dst_offset),
+                            node->as.fill.byte_count);
             [encoder fillBuffer:dst range:range value:node->as.fill.value];
             [encoder endEncoding];
             mg_buffer_retain(node->as.fill.dst);
@@ -1248,7 +1401,9 @@ mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream, mg_launch_
                 [encoder copyFromBuffer:workspace
                            sourceOffset:node->as.workspace_fill.offset
                                toBuffer:dst
-                      destinationOffset:node->as.workspace_fill.dst_offset
+                      destinationOffset:mg_metal_buffer_offset(
+                                            node->as.workspace_fill.dst,
+                                            node->as.workspace_fill.dst_offset)
                                    size:node->as.workspace_fill.size];
                 [encoder endEncoding];
                 mg_buffer_retain(node->as.workspace_fill.dst);

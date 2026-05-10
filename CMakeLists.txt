@@ -73,7 +73,7 @@ endif()
 
 set_target_properties(metal_graph PROPERTIES
   OUTPUT_NAME metal_graph
-  PUBLIC_HEADER include/metal_graph/metal_graph.h
+  PUBLIC_HEADER "include/metal_graph/metal_graph.h;include/metal_graph/metal_graph_metal.h"
   C_VISIBILITY_PRESET hidden
   CXX_VISIBILITY_PRESET hidden
   OBJCXX_VISIBILITY_PRESET hidden
@@ -180,6 +180,17 @@ if(BUILD_TESTING)
       )
       target_link_libraries(metal_graph_metal_dispatch_test PRIVATE MetalGraph::metal_graph)
       add_test(NAME metal_graph_metal_dispatch_test COMMAND metal_graph_metal_dispatch_test)
+
+      add_executable(metal_graph_external_buffer_test
+        tests/gpu/metal_external_buffer_test.mm
+      )
+      add_dependencies(metal_graph_external_buffer_test metal_graph_test_metallib)
+      target_compile_options(metal_graph_external_buffer_test PRIVATE -fobjc-arc)
+      target_compile_definitions(metal_graph_external_buffer_test PRIVATE
+        TEST_METALLIB_PATH="${MG_TEST_METALLIB}"
+      )
+      target_link_libraries(metal_graph_external_buffer_test PRIVATE MetalGraph::metal_graph)
+      add_test(NAME metal_graph_external_buffer_test COMMAND metal_graph_external_buffer_test)
 
       if(MG_HAS_MPSGRAPH)
         add_executable(metal_graph_mpsgraph_node_test

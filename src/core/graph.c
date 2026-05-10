@@ -156,6 +156,7 @@ static mg_status_t mg_validate_mpsgraph_tensor_desc(const mg_mpsgraph_tensor_des
 
     size_t byte_count = tensor->byte_count ? tensor->byte_count : required_bytes;
     if (byte_count < required_bytes || tensor->byte_offset != 0 ||
+        tensor->buffer->byte_offset != 0 ||
         !mg_range_valid(tensor->buffer->length, tensor->byte_offset, byte_count)) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
                             MG_NODE_ID_INVALID, "MPSGraph tensor buffer range is invalid", NULL);

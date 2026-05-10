@@ -128,3 +128,15 @@ status = unsupported_public_api
 This is an intentional result. The repository should add the positive zero-copy workflow only after
 MLX exposes a stable public storage handle that can be retained, range-checked, device-checked, and
 synchronized honestly.
+
+## Phase 10 Relationship
+
+Phase 10 adds the Metal Graph runtime foundation for external Metal storage wrapping through a
+Metal-specific extension header. That proves Metal Graph can use externally owned `MTLBuffer`
+storage as `mg_buffer_t` without copying.
+
+Phase 10 does not, by itself, make MLX zero-copy supported. The MLX adapter must continue to reject
+`mode="zero_copy"` unless Phase 11 obtains a supported public MLX export path or supported shim that
+proves storage identity, byte range, device identity, lifetime ownership, layout, dtype, and
+synchronization safety. Explicit `mode="copy"` remains a copy path and must report
+`is_zero_copy == False`.

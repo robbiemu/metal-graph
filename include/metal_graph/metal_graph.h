@@ -153,6 +153,30 @@ typedef struct mg_graph_exec_diagnostics {
     mg_icb_fallback_reason_t icb_last_fallback_reason;
 } mg_graph_exec_diagnostics_t;
 
+typedef enum mg_buffer_origin_kind {
+    MG_BUFFER_ORIGIN_LIBRARY_OWNED = 1,
+    MG_BUFFER_ORIGIN_EXTERNAL_METAL = 2,
+    MG_BUFFER_ORIGIN_ADAPTER_COPY = 3,
+    MG_BUFFER_ORIGIN_ADAPTER_ZERO_COPY = 4
+} mg_buffer_origin_kind_t;
+
+/*
+ * source_framework and fallback_reason are borrowed from the buffer and remain
+ * valid until the buffer is destroyed. Copy them if they must outlive it.
+ */
+typedef struct mg_buffer_origin_info {
+    size_t size;
+    mg_buffer_origin_kind_t origin_kind;
+    uint8_t is_zero_copy;
+    uint8_t is_external;
+    uint8_t is_host_visible;
+    uint8_t is_mutable;
+    size_t byte_offset;
+    size_t byte_length;
+    const char *source_framework;
+    const char *fallback_reason;
+} mg_buffer_origin_info_t;
+
 typedef struct mg_dispatch_desc {
     size_t size;
     const char *metallib_path;
@@ -290,6 +314,9 @@ MG_API mg_status_t mgBufferCreateShared(mg_device_t *device, size_t length,
 MG_API void mgBufferDestroy(mg_buffer_t *buffer);
 MG_API size_t mgBufferLength(const mg_buffer_t *buffer);
 MG_API void *mgBufferContents(mg_buffer_t *buffer);
+MG_API mg_status_t mgBufferGetOriginInfo(const mg_buffer_t *buffer,
+                                         mg_buffer_origin_info_t *out_info,
+                                         mg_error_t **out_error);
 
 /*
  * Creates a caller-owned timeline event.
