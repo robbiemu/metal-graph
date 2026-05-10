@@ -1,9 +1,7 @@
 from pathlib import Path
 
-import pytest
-
 import metal_graph as mg
-
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 METALLIB = ROOT / "build" / "phase0_test_kernels.metallib"

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import ctypes
 import os
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
 
 MG_STATUS_OK = 0
 MG_STATUS_INVALID_ARGUMENT = 1
@@ -286,7 +286,7 @@ class Device(_Handle):
     _destroy = "mgDeviceDestroy"
 
     @classmethod
-    def system_default(cls) -> "Device":
+    def system_default(cls) -> Device:
         out = ctypes.c_void_p()
         error = ctypes.c_void_p()
         status = _load_library().mgDeviceCreateSystemDefault(ctypes.byref(out), ctypes.byref(error))
@@ -298,10 +298,12 @@ class Stream(_Handle):
     _destroy = "mgStreamDestroy"
 
     @classmethod
-    def create(cls, device: Device) -> "Stream":
+    def create(cls, device: Device) -> Stream:
         out = ctypes.c_void_p()
         error = ctypes.c_void_p()
-        status = _load_library().mgStreamCreate(device._handle, ctypes.byref(out), ctypes.byref(error))
+        status = _load_library().mgStreamCreate(
+            device._handle, ctypes.byref(out), ctypes.byref(error)
+        )
         _check(status, error)
         return cls(out)
 
@@ -310,7 +312,7 @@ class Buffer(_Handle):
     _destroy = "mgBufferDestroy"
 
     @classmethod
-    def shared(cls, device: Device, length: int) -> "Buffer":
+    def shared(cls, device: Device, length: int) -> Buffer:
         out = ctypes.c_void_p()
         error = ctypes.c_void_p()
         status = _load_library().mgBufferCreateShared(
@@ -326,7 +328,10 @@ class Buffer(_Handle):
     def _contents(self) -> int:
         address = _load_library().mgBufferContents(self._handle)
         if not address:
-            raise MetalGraphError(MG_STATUS_UNSUPPORTED, message="buffer has no host-visible contents")
+            raise MetalGraphError(
+                MG_STATUS_UNSUPPORTED,
+                message="buffer has no host-visible contents",
+            )
         return int(address)
 
     def write_uint32s(self, values: Sequence[int]) -> None:
@@ -357,7 +362,7 @@ class Graph(_Handle):
     _destroy = "mgGraphDestroy"
 
     @classmethod
-    def create(cls) -> "Graph":
+    def create(cls) -> Graph:
         out = ctypes.c_void_p()
         error = ctypes.c_void_p()
         status = _load_library().mgGraphCreate(ctypes.byref(out), ctypes.byref(error))
@@ -408,7 +413,7 @@ class Graph(_Handle):
         _check(status, error)
         return Node(out)
 
-    def instantiate(self, device: Device) -> "GraphExec":
+    def instantiate(self, device: Device) -> GraphExec:
         out = ctypes.c_void_p()
         error = ctypes.c_void_p()
         status = _load_library().mgGraphInstantiate(
@@ -421,7 +426,7 @@ class Graph(_Handle):
 class GraphExec(_Handle):
     _destroy = "mgGraphExecDestroy"
 
-    def launch(self, stream: Stream) -> "Launch":
+    def launch(self, stream: Stream) -> Launch:
         out = ctypes.c_void_p()
         error = ctypes.c_void_p()
         status = _load_library().mgGraphLaunch(
