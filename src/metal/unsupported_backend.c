@@ -107,3 +107,9 @@ mg_status_t mgLaunchSynchronize(mg_launch_t *launch, mg_error_t **out_error) {
 void mg_backend_launch_destroy(mg_launch_t *launch) { (void)launch; }
 
 void mgLaunchDestroy(mg_launch_t *launch) { free(launch); }
+
+bool mg_backend_physical_overlap(const mg_buffer_t *a, size_t ao, size_t ac,
+                                 const mg_buffer_t *b, size_t bo, size_t bc) {
+    if (!a || !b || !ac || !bc || (a != b && (!a->impl || a->impl != b->impl))) return false;
+    return ao <= bo ? bo - ao < ac : ao - bo < bc;
+}

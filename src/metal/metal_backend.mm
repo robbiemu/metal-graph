@@ -10,6 +10,28 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool mg_backend_physical_overlap(const mg_buffer_t *a, size_t ao, size_t ac,
+                                 const mg_buffer_t *b, size_t bo, size_t bc) {
+    if (!a || !b || !ac || !bc) return false;
+    if (a == b || (a->impl && a->impl == b->impl))
+        return ao <= bo ? bo - ao < ac : ao - bo < bc;
+    if (!a->impl || !b->impl || !a->origin_kind || !b->origin_kind) return false;
+    id<MTLBuffer> an = (__bridge id<MTLBuffer>)a->impl;
+    id<MTLBuffer> bn = (__bridge id<MTLBuffer>)b->impl;
+    id<MTLHeap> heap = an.heap;
+    if (!heap || heap != bn.heap) return false;
+    if (@available(macOS 10.15, *)) {
+        if (heap.type == MTLHeapTypePlacement) {
+            if (an.heapOffset > SIZE_MAX - ao || bn.heapOffset > SIZE_MAX - bo) return true;
+            ao += an.heapOffset; bo += bn.heapOffset;
+            if (ac > SIZE_MAX - ao || bc > SIZE_MAX - bo) return true;
+            return ao <= bo ? bo - ao < ac : ao - bo < bc;
+        }
+        if (heap.type == MTLHeapTypeAutomatic) return [an isAliasable] || [bn isAliasable];
+    }
+    return true;
+}
+
 static NSString *mg_string(const char *value) {
     return value ? [NSString stringWithUTF8String:value] : nil;
 }
@@ -975,6 +997,23 @@ mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_
         }
     }
 
+    /* Freeze explicit edges in executable order, independent of the source graph. */
+    if (graph->edge_count) {
+        if (graph->edge_count > SIZE_MAX / sizeof(*exec->edges) ||
+            !(exec->edges = (mg_edge_t *)malloc(graph->edge_count * sizeof(*exec->edges)))) {
+            free(order);
+            mgGraphExecDestroy(exec);
+            return mg_set_oom(out_error, MG_ERROR_STAGE_INSTANTIATE);
+        }
+        exec->edge_count = graph->edge_count;
+        for (size_t e = 0; e < graph->edge_count; ++e) {
+            size_t before = 0, after = 0;
+            while (order[before] != graph->edges[e].before) ++before;
+            while (order[after] != graph->edges[e].after) ++after;
+            exec->edges[e] = (mg_edge_t){before, after};
+        }
+    }
+
     id<MTLDevice> metalDevice = (__bridge id<MTLDevice>)device->impl;
     exec->device_impl = (__bridge_retained void *)metalDevice;
     status = mg_workspace_allocate(exec, metalDevice, out_error);
@@ -1093,6 +1132,7 @@ void mgGraphExecDestroy(mg_graph_exec_t *exec) {
 
     mg_backend_graph_exec_destroy(exec);
     free(exec->nodes);
+    free(exec->edges);
     free(exec);
 }
 

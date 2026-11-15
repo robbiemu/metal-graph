@@ -28,7 +28,130 @@ static mg_dispatch_desc_t test_dispatch_desc(void) {
     return desc;
 }
 
+/* These synthetic execs exercise core patch validation without a Metal device. */
+static int test_patch_write_hazards(void) {
+    mg_error_t *error = NULL;
+    int native, other_native, device, other_device;
+    mg_buffer_t a = {.impl = &native, .length = 96, .byte_offset = 16, .ref_count = 20};
+    mg_buffer_t alias = {.impl = &native, .length = 80, .byte_offset = 32, .ref_count = 20};
+    mg_buffer_t other = {.impl = &other_native, .length = 96, .ref_count = 20};
+    mg_buffer_t wrong = {.impl = &other_native, .device_impl = &other_device, .length = 96,
+                         .ref_count = 20};
+    mg_exec_node_t nodes[2] = {0};
+    mg_edge_t edge = {0, 1};
+    mg_graph_exec_t exec = {.nodes = nodes, .node_count = 2, .edges = &edge,
+                            .device_impl = &device};
+    mg_buffer_binding_t binding = {0, &other, 4};
+    mg_dispatch_resource_desc_t resource = {sizeof(resource), 0, MG_RESOURCE_ACCESS_WRITE, 4, 8, 4};
+    nodes[0].kind = MG_NODE_DISPATCH;
+    nodes[0].as.dispatch = (mg_exec_dispatch_t){.id = 1, .patch_flags = MG_PATCH_DISPATCH_BUFFER,
+        .buffers = &binding, .buffer_count = 1, .resources = &resource, .resource_count = 1};
+    nodes[1].kind = MG_NODE_FILL;
+    nodes[1].as.fill = (mg_exec_fill_t){.id = 2, .dst = &a, .dst_offset = 20, .byte_count = 12};
+#define CHECK(call, wanted, label) do { \
+    mg_status_t result = (call); \
+    if (expect_status(result, (wanted), (label))) { mgErrorDestroy(error); return 1; } \
+    mgErrorDestroy(error); error = NULL; \
+} while (0)
+    /* Proposed absolute dispatch range [36,44), fill [36,48). */
+    CHECK(mgGraphExecPatchDispatchBuffer(&exec, 1, 0, &alias, 0, &error),
+          MG_STATUS_INVALID_TOPOLOGY, "dispatch wrapper overlap");
+    if (binding.buffer != &other || binding.offset != 4 || alias.ref_count != 20 || other.ref_count != 20)
+        return 1;
+    CHECK(mgGraphExecPatchDispatchBuffer(&exec, 1, 0, &alias, 12, &error), MG_STATUS_OK,
+          "dispatch touching accepted");
+    CHECK(mgGraphExecPatchDispatchBuffer(&exec, 1, 0, &alias, 4, &error),
+          MG_STATUS_INVALID_TOPOLOGY, "dispatch partial overlap");
+    if (binding.buffer != &alias || binding.offset != 12 || alias.ref_count != 21) return 1;
+    exec.edge_count = 1;
+    CHECK(mgGraphExecPatchDispatchBuffer(&exec, 1, 0, &alias, 0, &error), MG_STATUS_OK,
+          "ordered dispatch overlap");
+    exec.edge_count = 0;
+    resource.access = MG_RESOURCE_ACCESS_READ;
+    CHECK(mgGraphExecPatchDispatchBuffer(&exec, 1, 0, &alias, 0, &error), MG_STATUS_OK,
+          "read-only dispatch overlap");
+    resource.access = MG_RESOURCE_ACCESS_WRITE;
+
+    nodes[0].kind = MG_NODE_COPY;
+    nodes[0].as.copy = (mg_exec_copy_t){.id = 1, .patch_flags = MG_PATCH_COPY_BUFFER | MG_PATCH_COPY_RANGE,
+        .src = &other, .dst = &other, .byte_count = 8};
+    mg_copy_desc_t copy = {.size = sizeof(copy), .src = &other, .dst = &alias,
+                           .dst_offset = 8, .byte_count = 12};
+    CHECK(mgGraphExecPatchCopyNode(&exec, 1, &copy, &error), MG_STATUS_INVALID_TOPOLOGY,
+          "copy destination partial overlap");
+    if (nodes[0].as.copy.dst != &other || nodes[0].as.copy.byte_count != 8) return 1;
+    copy.dst_offset = 16;
+    CHECK(mgGraphExecPatchCopyNode(&exec, 1, &copy, &error), MG_STATUS_OK, "copy touching");
+    copy.dst = &wrong;
+    CHECK(mgGraphExecPatchCopyNode(&exec, 1, &copy, &error), MG_STATUS_INVALID_ARGUMENT,
+          "copy wrong device");
+
+    nodes[0].kind = MG_NODE_FILL;
+    nodes[0].as.fill = (mg_exec_fill_t){.id = 1, .patch_flags = MG_PATCH_FILL_BUFFER | MG_PATCH_FILL_RANGE,
+        .dst = &other, .dst_offset = 4, .byte_count = 8};
+    mg_fill_desc_t fill = {.size = sizeof(fill), .dst = &alias, .dst_offset = 8, .byte_count = 8};
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_TOPOLOGY,
+          "fill buffer overlap");
+    fill.dst_offset = 16;
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_OK, "fill touching");
+    fill.dst_offset = 8;
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_TOPOLOGY,
+          "fill range overlap");
+    if (nodes[0].as.fill.dst_offset != 16) return 1;
+    fill.dst = &wrong;
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_ARGUMENT,
+          "fill wrong device");
+    fill.dst = &alias; fill.dst_offset = 8;
+    nodes[1].kind = MG_NODE_DISPATCH;
+    mg_buffer_binding_t b2 = {0, &a, 20};
+    mg_dispatch_resource_desc_t r2 = {sizeof(r2), 0, MG_RESOURCE_ACCESS_READ, 0, 0, 1};
+    nodes[1].as.dispatch = (mg_exec_dispatch_t){.id = 2, .buffers = &b2, .buffer_count = 1,
+                                                 .resources = &r2, .resource_count = 1};
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_OK, "opponent read");
+    r2.access = MG_RESOURCE_ACCESS_UNKNOWN;
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_TOPOLOGY,
+          "unknown opponent remaining range");
+    nodes[1].as.dispatch.resource_count = 0;
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_TOPOLOGY,
+          "missing opponent metadata");
+    r2.access = MG_RESOURCE_ACCESS_READ_WRITE;
+    nodes[1].as.dispatch.resource_count = 1;
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_TOPOLOGY,
+          "read-write opponent");
+    nodes[1].kind = MG_NODE_COPY;
+    nodes[1].as.copy = (mg_exec_copy_t){.id = 2, .src = &other, .dst = &a,
+                                       .dst_offset = 20, .byte_count = 12};
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_TOPOLOGY,
+          "copy destination opponent");
+    nodes[1].kind = MG_NODE_MPSGRAPH;
+    mg_mpsgraph_tensor_t target = {.buffer = &a, .byte_offset = 20, .byte_count = 12};
+    nodes[1].as.mpsgraph.targets = &target;
+    nodes[1].as.mpsgraph.target_count = 1;
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_TOPOLOGY,
+          "MPSGraph target opponent");
+    nodes[1].kind = (mg_node_kind_t)MG_NODE_INTERNAL_WORKSPACE_FILL;
+    nodes[1].as.workspace_fill = (mg_exec_workspace_fill_t){.dst = &a, .dst_offset = 20, .size = 12};
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_TOPOLOGY,
+          "workspace fill opponent");
+    exec.in_flight_count = 1;
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_ARGUMENT,
+          "in-flight fill patch");
+    exec.in_flight_count = 0;
+    nodes[0].as.fill.patch_flags = 0;
+    fill.dst_offset = 0;
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_ARGUMENT,
+          "non-patchable fill range");
+    nodes[0].as.fill.patch_flags = MG_PATCH_FILL_BUFFER | MG_PATCH_FILL_RANGE;
+    mg_buffer_t overflow = {.length = 16, .byte_offset = SIZE_MAX - 4, .ref_count = 20};
+    fill.dst = &overflow; fill.dst_offset = 0; fill.byte_count = 8;
+    CHECK(mgGraphExecPatchFillNode(&exec, 1, &fill, &error), MG_STATUS_INVALID_ARGUMENT,
+          "absolute end overflow");
+#undef CHECK
+    return 0;
+}
+
 int main(void) {
+    if (test_patch_write_hazards()) return 1;
     mg_error_t *error = NULL;
     if (expect_status(mgGraphCreate(NULL, &error), MG_STATUS_INVALID_ARGUMENT,
                       "create graph with null output")) {
@@ -469,6 +592,8 @@ int main(void) {
     mg_node_t *no_resource_node = NULL;
     if (expect_status(mgGraphAddDispatchNode(graph, &resource_desc, &no_resource_node, &error),
                       MG_STATUS_OK, "add dispatch without resource requirement") ||
+        expect_status(mgGraphAddDependency(graph, resource_node, no_resource_node, &error),
+                      MG_STATUS_OK, "order overlapping dispatch fixture writes") ||
         expect_status(
             mgGraphSetNodePatchFlags(graph, no_resource_node, MG_PATCH_DISPATCH_BUFFER, &error),
             MG_STATUS_INVALID_ARGUMENT,
@@ -534,6 +659,9 @@ int main(void) {
     memset(&patch_exec, 0, sizeof(patch_exec));
     patch_exec.nodes = patch_nodes;
     patch_exec.node_count = 5;
+    mg_edge_t patch_edge = {1, 2}; /* Existing copy and fill are ordered. */
+    patch_exec.edges = &patch_edge;
+    patch_exec.edge_count = 1;
 
     uint32_t new_grid[3] = {2, 1, 1};
     uint32_t too_large_grid[3] = {5, 1, 1};
@@ -679,6 +807,53 @@ int main(void) {
         return 29;
     }
     mgErrorDestroy(error);
+    error = NULL;
+
+    mg_graph_t *overlap_graph = NULL;
+    mg_buffer_t overlap_buffer = {0};
+    overlap_buffer.impl = &overlap_buffer;
+    overlap_buffer.length = 16;
+    overlap_buffer.ref_count = 1;
+    mg_fill_desc_t first_fill;
+    memset(&first_fill, 0, sizeof(first_fill));
+    first_fill.size = sizeof(first_fill);
+    first_fill.dst = &overlap_buffer;
+    first_fill.byte_count = 8;
+    first_fill.value = 0x11;
+    mg_fill_desc_t second_fill = first_fill;
+    second_fill.dst_offset = 4;
+    second_fill.value = 0x22;
+    mg_node_t *first_fill_node = NULL;
+    mg_node_t *second_fill_node = NULL;
+    if (expect_status(mgGraphCreate(&overlap_graph, &error), MG_STATUS_OK,
+                      "create overlap graph") ||
+        expect_status(mgGraphAddFillNode(overlap_graph, &first_fill, &first_fill_node, &error),
+                      MG_STATUS_OK, "add first overlapping fill") ||
+        expect_status(mgGraphAddFillNode(overlap_graph, &second_fill, &second_fill_node, &error),
+                      MG_STATUS_OK, "add second overlapping fill")) {
+        mgGraphDestroy(overlap_graph);
+        mgGraphDestroy(graph);
+        return 30;
+    }
+    if (expect_status(mgGraphValidate(overlap_graph, &error), MG_STATUS_INVALID_TOPOLOGY,
+                      "reject unordered overlapping writes")) {
+        mgErrorDestroy(error);
+        mgGraphDestroy(overlap_graph);
+        mgGraphDestroy(graph);
+        return 30;
+    }
+    mgErrorDestroy(error);
+    error = NULL;
+    if (expect_status(mgGraphAddDependency(overlap_graph, first_fill_node, second_fill_node,
+                                           &error),
+                      MG_STATUS_OK, "order overlapping writes") ||
+        expect_status(mgGraphValidate(overlap_graph, &error), MG_STATUS_OK,
+                      "allow ordered overlapping writes")) {
+        mgGraphDestroy(overlap_graph);
+        mgGraphDestroy(graph);
+        return 30;
+    }
+    mgGraphDestroy(overlap_graph);
     error = NULL;
 
     mg_dispatch_desc_t desc = test_dispatch_desc();

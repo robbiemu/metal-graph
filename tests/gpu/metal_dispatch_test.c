@@ -584,6 +584,9 @@ int main(void) {
         expect_status(
             mgGraphAddDispatchNode(multi_dispatch_graph, &multi_desc, &multi_second, &error),
             MG_STATUS_OK, "add phase4 multi-dispatch second", &error) ||
+        expect_status(mgGraphAddDependency(multi_dispatch_graph, multi_first, multi_second,
+                                           &error),
+                      MG_STATUS_OK, "order phase4 overlapping multi-dispatch writes", &error) ||
         expect_status(mgGraphInstantiate(multi_dispatch_graph, device, &exec, &error), MG_STATUS_OK,
                       "instantiate phase4 multi-dispatch graph", &error)) {
         mgGraphDestroy(multi_dispatch_graph);

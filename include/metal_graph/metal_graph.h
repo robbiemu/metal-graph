@@ -414,7 +414,9 @@ MG_API void mgGraphExecDestroy(mg_graph_exec_t *exec);
  * Patches address instantiated nodes by mg_node_id_t and mutate only the exec's default state.
  * Successful patches affect future launches only. Patches are rejected while a launch using the
  * exec is in flight, and a failed patch leaves the previous exec state usable. Topology changes,
- * workspace/liveness changes, and per-launch overlays are not supported in Phase 3.
+ * workspace/liveness changes, and per-launch overlays are not supported in Phase 3. Buffer and
+ * range patches reject overlapping writes to the same buffer or native Metal buffer unless the
+ * writing nodes have an explicit dependency path. Rejected patches leave bindings unchanged.
  */
 MG_API mg_status_t mgGraphExecPatchDispatchGrid(mg_graph_exec_t *exec, mg_node_id_t node_id,
                                                 const uint32_t grid_size[3],

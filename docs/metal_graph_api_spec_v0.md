@@ -396,3 +396,15 @@ Phase 11 does not use private MLX internals, does not claim positive zero-copy, 
 synchronization, does not add MLX graph capture or compiler behavior, and does not introduce Core ML,
 Metal ML, ANE, or Neural Accelerator API surface. The core C runtime remains independent of Python
 and MLX.
+
+
+## Graph And Patch Write Ordering
+
+Graph validation rejects overlapping writes unless an explicit dependency path orders the writers.
+Dispatch, copy, fill and MPSGraph target ranges participate; unknown access is conservative. Patches
+check proposed ranges against the frozen dependency graph before mutating defaults, and rejection
+leaves the previous bindings usable. Source-graph destruction does not discard exec dependencies.
+Touching half-open ranges are disjoint. Native buffer identity, wrapped offsets and observable heap
+placement ranges participate. This is not complete read/write tracking, cross-exec reservation or
+foreign-framework ordering. Unobservable aliases remain caller-coordinated. See the standalone
+public-header conformance test in `tests/gpu/public_write_hazards_test.c`.

@@ -275,6 +275,8 @@ typedef struct mg_icb_plan {
 struct mg_graph_exec {
     mg_exec_node_t *nodes;
     size_t node_count;
+    mg_edge_t *edges; /* dependency endpoints indexed by executable node order */
+    size_t edge_count;
     void *device_impl;
     mg_workspace_plan_t workspace;
     mg_icb_plan_t icb;
@@ -348,6 +350,9 @@ void mg_backend_event_destroy(mg_event_t *event);
 void mg_backend_graph_exec_destroy(mg_graph_exec_t *exec);
 void mg_backend_launch_destroy(mg_launch_t *launch);
 void *mg_backend_buffer_contents(mg_buffer_t *buffer);
+/* Offsets are native-buffer relative. */
+bool mg_backend_physical_overlap(const mg_buffer_t *a, size_t ao, size_t ac,
+                                 const mg_buffer_t *b, size_t bo, size_t bc);
 
 #ifdef __cplusplus
 }
