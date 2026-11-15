@@ -103,7 +103,7 @@ mg_status_t mgArenaCreate(mg_device_t *device, const mg_arena_desc_t *desc, mg_a
 
 void mg_arena_retain(mg_arena_t *arena) {
     if (arena) {
-        arena->ref_count++;
+        __atomic_fetch_add(&arena->ref_count, 1, __ATOMIC_RELAXED);
     }
 }
 
@@ -112,10 +112,7 @@ void mg_arena_release(mg_arena_t *arena) {
         return;
     }
 
-    if (arena->ref_count > 1) {
-        arena->ref_count--;
-        return;
-    }
+    if (__atomic_fetch_sub(&arena->ref_count, 1, __ATOMIC_ACQ_REL) != 1) return;
 
     free(arena);
 }

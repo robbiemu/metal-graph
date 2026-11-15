@@ -1,3 +1,4 @@
+import ctypes
 from pathlib import Path
 
 import metal_graph as mg
@@ -5,6 +6,21 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 METALLIB = ROOT / "build" / "phase0_test_kernels.metallib"
+
+
+def test_manual_hazard_fallback_converts_from_native_diagnostics(monkeypatch):
+    class FakeLibrary:
+        def mgGraphExecGetDiagnostics(self, _handle, out, _error):
+            raw = ctypes.cast(out, ctypes.POINTER(mg._GraphExecDiagnostics)).contents
+            raw.icb_last_fallback_reason = mg.MG_ICB_FALLBACK_MANUAL_HAZARDS
+            return mg.MG_STATUS_OK
+
+        def mgGraphExecDestroy(self, _handle):
+            pass
+
+    monkeypatch.setattr(mg, "_load_library", lambda: FakeLibrary())
+    with mg.GraphExec(1) as executable:
+        assert executable.diagnostics().icb_last_fallback_reason == "manual_hazards"
 
 
 def test_mlx_zero_copy_status_has_stable_diagnostic_fields():

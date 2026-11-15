@@ -28,6 +28,7 @@ let package = Package(
                 "docs",
                 "src/shaders",
                 "src/metal/unsupported_backend.c",
+                "src/metal/hazard_tracking.inc",
                 "tests",
             ],
             sources: ["src"],

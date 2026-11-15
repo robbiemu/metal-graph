@@ -140,7 +140,8 @@ typedef enum mg_icb_fallback_reason {
     MG_ICB_FALLBACK_INELIGIBLE_NODE = 3,
     MG_ICB_FALLBACK_UNKNOWN_RESOURCE_ACCESS = 4,
     MG_ICB_FALLBACK_PATCHABLE_FIELD = 5,
-    MG_ICB_FALLBACK_BACKEND_ERROR = 6
+    MG_ICB_FALLBACK_BACKEND_ERROR = 6,
+    MG_ICB_FALLBACK_MANUAL_HAZARDS = 7
 } mg_icb_fallback_reason_t;
 
 typedef struct mg_graph_exec_diagnostics {
@@ -152,6 +153,22 @@ typedef struct mg_graph_exec_diagnostics {
     uint32_t icb_groups_fallback;
     mg_icb_fallback_reason_t icb_last_fallback_reason;
 } mg_graph_exec_diagnostics_t;
+
+typedef uint32_t mg_sync_mode_flags_t;
+
+#define MG_SYNC_MODE_NONE ((mg_sync_mode_flags_t)0)
+#define MG_SYNC_MODE_LAUNCH_SYNCHRONIZE ((mg_sync_mode_flags_t)1u << 0)
+#define MG_SYNC_MODE_EVENT_WAIT ((mg_sync_mode_flags_t)1u << 1)
+#define MG_SYNC_MODE_EVENT_SIGNAL ((mg_sync_mode_flags_t)1u << 2)
+
+typedef struct mg_launch_diagnostics {
+    size_t size;
+    mg_sync_mode_flags_t sync_mode_flags;
+    uint32_t synchronize_count;
+    uint32_t event_wait_count;
+    uint32_t event_signal_count;
+    uint32_t completed;
+} mg_launch_diagnostics_t;
 
 typedef enum mg_buffer_origin_kind {
     MG_BUFFER_ORIGIN_LIBRARY_OWNED = 1,
@@ -406,6 +423,10 @@ MG_API mg_status_t mgGraphValidate(const mg_graph_t *graph, mg_error_t **out_err
 /* Instantiates a frozen graph snapshot. The exec may outlive the source graph. */
 MG_API mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device,
                                       mg_graph_exec_t **out_exec, mg_error_t **out_error);
+/* Releases caller ownership; accepted launches retain the exec and its resources until terminal
+ * completion, including after early launch, exec or stream destruction. Returned launch handles
+ * also retain their original resource bindings until destroyed. Owner callbacks may run later on
+ * a runtime completion/cleanup thread. Serialize caller operations on an exec and its launches. */
 MG_API void mgGraphExecDestroy(mg_graph_exec_t *exec);
 
 /*
@@ -446,10 +467,28 @@ MG_API mg_status_t mgGraphExecGetDiagnostics(const mg_graph_exec_t *exec,
                                              mg_graph_exec_diagnostics_t *out_diagnostics,
                                              mg_error_t **out_error);
 
-/* Launches create fresh command buffers. Launch handles are destroyed with mgLaunchDestroy. */
+/*
+ * Launch accepts a job after synchronous preflight; encoding, submission and execution failures
+ * can be deferred to mgLaunchSynchronize. Accepted jobs on one stream execute in whole-job FIFO
+ * order. A successful launch without commands needs no GPU work. Event diagnostic counts and flags
+ * describe ordering requested by the accepted graph, not proof of submission or execution.
+ *
+ * Metal Graph does not perform hidden synchronization for external consumers. Reading data written
+ * by a launch before successful mgLaunchSynchronize, a completed ordered event, or an equivalent
+ * ordering point is invalid and may observe stale data.
+ */
 MG_API mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream,
                                  mg_launch_t **out_launch, mg_error_t **out_error);
+/* An UNSUPPORTED accounting error can return before physical completion is established. In that
+ * case diagnostics.completed remains false, resources and the stream remain retained/blocked,
+ * and a repeated synchronization reports the error; this result does not authorize resource reuse. */
 MG_API mg_status_t mgLaunchSynchronize(mg_launch_t *launch, mg_error_t **out_error);
+MG_API mg_status_t mgLaunchGetDiagnostics(const mg_launch_t *launch,
+                                          mg_launch_diagnostics_t *out_diagnostics,
+                                          mg_error_t **out_error);
+/* Releases launch ownership without waiting. Accepted work retains its exec, queue and graph
+ * resources through terminal completion even if this handle is destroyed early. Destroying the
+ * handle discards later error reporting; synchronize while it is live to receive deferred errors. */
 MG_API void mgLaunchDestroy(mg_launch_t *launch);
 
 #ifdef __cplusplus

@@ -43,21 +43,24 @@ bindings/rust/          Reserved for future Rust bindings
 
 ## Requirements
 
-For the current skeleton:
+For the native Metal backend:
 
-- macOS or another Clang/CMake-capable environment
+- macOS 15 or newer on Apple Silicon with a real Metal device
 - CMake 3.20+
 - Make
 - A C11 compiler
 
-Future Metal work will require Apple platform SDKs and the Metal framework.
+Install Apple's Xcode command-line tools and SDKs. Shader-dependent tests also need the
+optional Metal Toolchain component (`xcodebuild -downloadComponent MetalToolchain`).
+Portable core tests can run without Metal. Native blit, event and lifetime tests do not need
+the offline shader compiler; CMake reports when shader-dependent tests are unavailable.
 
 ## Build
 
 ```sh
-make configure
-make build
-make test
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
 SwiftPM can also build the C target:
@@ -83,10 +86,36 @@ uv run pytest
 Core CMake builds do not require the adapter:
 
 ```sh
-cmake -S . -B /private/tmp/metal-graph-no-adapter-build -DCMAKE_BUILD_TYPE=Debug -DMG_ENABLE_MLX_ADAPTER=OFF
-cmake --build /private/tmp/metal-graph-no-adapter-build
-ctest --test-dir /private/tmp/metal-graph-no-adapter-build --output-on-failure
+cmake -S . -B build-no-adapter -DCMAKE_BUILD_TYPE=Debug -DMG_ENABLE_MLX_ADAPTER=OFF
+cmake --build build-no-adapter
+ctest --test-dir build-no-adapter --output-on-failure
 ```
+
+## Native event handoffs and launch lifetime
+
+The Metal extension can import and export native shared events. The runnable
+[`shared_event_bridge.mm`](examples/metal/shared_event_bridge.mm) example sends work from
+an ordinary Metal producer through Metal Graph to an ordinary Metal consumer. It uses only
+public headers and Apple frameworks, with no MLX, external adapter, or shader compilation:
+
+```sh
+cmake --build build --target metal_graph_shared_event_example
+./build/metal_graph_shared_event_example
+```
+
+Accepted launches retain their executable, queue and resources until terminal completion,
+including after early public-handle destruction. Same-stream jobs execute in whole-job FIFO
+order; mixed raw/MPSGraph stages advance from completion callbacks. Synchronize a live launch
+to receive deferred errors. `mgLaunchGetDiagnostics` reports explicit synchronization and
+requested event ordering; an event count does not prove execution or successful output.
+
+Overlapping writes require dependency ordering inside a graph, including after patches.
+Active launches also check observable native allocation ranges. Cross-stream event proofs
+are deliberately narrow, and foreign writers or unobservable aliases remain caller-coordinated.
+Untracked resources may require fences and direct-encoding fallback. This can reduce overlap;
+no performance improvement is claimed. If MPSGraph submission cannot be accounted for, the
+runtime reports an error and retains potentially live resources rather than guessing completion.
+See the [native runtime contract](docs/metal_graph_api_spec_v0.md#native-launch-and-synchronization-contract).
 
 ## ABI Direction
 

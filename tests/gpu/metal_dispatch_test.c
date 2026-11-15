@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 static void print_error(const char *label, mg_status_t status, mg_error_t *error) {
     fprintf(stderr, "%s failed: %s", label, mgStatusString(status));
@@ -556,8 +557,23 @@ int main(void) {
                       "sync phase4 icb or fallback", &error)) {
         goto cleanup;
     }
+    if (__atomic_load_n(&exec->ref_count, __ATOMIC_ACQUIRE) != 2) {
+        fprintf(stderr, "phase4 ICB/fallback launch did not retain exec\n");
+        goto cleanup;
+    }
     mgLaunchDestroy(launch);
     launch = NULL;
+    /* Completion cleanup may release its last reference on a cleanup queue. */
+    for (unsigned attempt = 0;
+         attempt < 2000 && __atomic_load_n(&exec->ref_count, __ATOMIC_ACQUIRE) != 1;
+         ++attempt) {
+        struct timespec delay = {0, 1000000};
+        nanosleep(&delay, NULL);
+    }
+    if (__atomic_load_n(&exec->ref_count, __ATOMIC_ACQUIRE) != 1) {
+        fprintf(stderr, "phase4 ICB/fallback launch did not release exec\n");
+        goto cleanup;
+    }
     memset(&diagnostics, 0, sizeof(diagnostics));
     diagnostics.size = sizeof(diagnostics);
     if (expect_status(mgGraphExecGetDiagnostics(exec, &diagnostics, &error), MG_STATUS_OK,
@@ -565,6 +581,9 @@ int main(void) {
         check_values(icb_values, 12, 22, 32, 42, "phase4 icb or fallback")) {
         goto cleanup;
     }
+    fprintf(stderr, "ICB ownership test: used=%u fallback=%u reason=%d\n",
+            diagnostics.icb_groups_used, diagnostics.icb_groups_fallback,
+            (int)diagnostics.icb_last_fallback_reason);
     if (diagnostics.icb_groups_used == 0 && diagnostics.icb_groups_fallback == 0) {
         fprintf(stderr, "phase4 diagnostics should report ICB use or fallback\n");
         goto cleanup;
@@ -768,9 +787,6 @@ int main(void) {
 
     if (expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
                       "launch phase3 initial graph", &error) ||
-        expect_status(mgGraphExecPatchDispatchGrid(exec, phase3_dispatch_id,
-                                                   phase3_dispatch_desc.max_grid_size, &error),
-                      MG_STATUS_INVALID_ARGUMENT, "reject in-flight phase3 patch", &error) ||
         expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK, "sync phase3 initial",
                       &error)) {
         goto cleanup;

@@ -47,8 +47,8 @@ Phase 0 must not expose Objective-C, Swift, C++ STL, Metal framework types, indi
 - Duplicate dependencies are accepted as idempotent no-ops.
 - Empty graphs are valid no-op graphs.
 - Instantiation freezes a snapshot of the graph.
-- A launch encodes a fresh `MTLCommandBuffer`.
-- Synchronization waits for completion and reports command buffer errors.
+- A launch encodes fresh `MTLCommandBuffer` objects as needed. Successful zero-command jobs need no GPU submission.
+- Synchronization observes terminal work and reports deferred encoding, submission, and execution errors. The native runtime contract below defines completion accounting failures.
 - Metal resources referenced by an instantiated graph or launch must remain retained until no longer needed.
 
 ## Phase 1 Public Surface
@@ -72,7 +72,7 @@ Phase 1 does not add arenas/heaps, patch/update semantics, indirect command buff
 - Phase 1 node parameters are frozen at instantiation and are not patchable.
 - `mg_graph_exec_t` retains buffers and events required for relaunch.
 - Destroying the source graph, source buffer handles, or source event handles after successful instantiation must not invalidate the graph exec.
-- Destroying a graph exec or stream while a launch using it is in flight remains invalid v1 caller behavior.
+- Accepted launches retain their executable, queue and resources through terminal completion after public graph-exec, stream or launch handle destruction. Related caller operations remain serialized; destruction of a launch discards later error retrieval.
 
 ## Phase 2 Public Surface
 
@@ -183,7 +183,7 @@ buffer binding indices.
 
 v1 targets macOS 15.0+ on Apple Silicon. The required backend path is raw Metal compute/blit execution with freshly encoded command buffers and `MTLSharedEvent` timeline events. Optional features such as residency sets, ICBs, MPSGraph, Metal 4 APIs, iOS/iPadOS, and Python/MLX adapters must remain optional unless a future API explicitly requires them.
 
-v1 uses caller-side synchronization. Graphs are mutable and not thread-safe. Graph execs are immutable and reusable after completion, but only one in-flight launch per exec is valid in v1. Destroying an exec or stream while a launch using it is in flight is invalid.
+v1 uses caller-side synchronization. Graphs are mutable and not thread-safe. An exec owns frozen topology and patchable defaults, and only one in-flight launch per exec is valid. Accepted work retains its execution state after early public-handle destruction. Same-stream accepted jobs execute in whole-job FIFO order. Caller operations on an exec and its launches must be serialized.
 
 Public ownership is create/destroy. Graph execs must retain/copy the buffers, events, arena descriptors, workspace plans, patch tables, descriptors, scalar values, and backend objects needed for relaunch after source graph, descriptor, buffer handle, event handle, or arena handle destruction. Descriptors are borrowed only for the duration of API calls.
 
@@ -227,9 +227,9 @@ backend loads the package privately during instantiation and clones/retains tens
 buffers into GraphExec state. It also owns an exec-private copy of the package so removing the
 caller-provided package path after successful instantiation does not invalidate the exec.
 
-MPSGraph nodes force direct encoding/ICB fallback. The initial backend may conservatively segment
-command buffers around MPSGraph nodes and synchronize prior raw Metal work before encoding an
-MPSGraph executable. This is a correctness choice for Phase 5, not a long-term performance claim.
+MPSGraph nodes force direct encoding/ICB fallback. The backend segments mixed work and advances
+each stage from completion callbacks. It does not host-wait for earlier stages during launch.
+The native runtime contract below defines completion tracking and fail-closed behavior.
 
 Future Phase 5 design work includes defining broader import/description boundaries for MPSGraph
 executables, richer shape/dtype/layout compatibility rules, MPSGraph-to-`mg_error_t` error mapping,
@@ -398,13 +398,93 @@ Metal ML, ANE, or Neural Accelerator API surface. The core C runtime remains ind
 and MLX.
 
 
-## Graph And Patch Write Ordering
+## Native Launch And Synchronization Contract
 
-Graph validation rejects overlapping writes unless an explicit dependency path orders the writers.
-Dispatch, copy, fill and MPSGraph target ranges participate; unknown access is conservative. Patches
-check proposed ranges against the frozen dependency graph before mutating defaults, and rejection
-leaves the previous bindings usable. Source-graph destruction does not discard exec dependencies.
-Touching half-open ranges are disjoint. Native buffer identity, wrapped offsets and observable heap
-placement ranges participate. This is not complete read/write tracking, cross-exec reservation or
-foreign-framework ordering. Unobservable aliases remain caller-coordinated. See the standalone
-public-header conformance test in `tests/gpu/public_write_hazards_test.c`.
+Launch performs synchronous preflight and accepts an asynchronous job. Encoding, submission and
+execution errors may be deferred to `mgLaunchSynchronize`, with stage and node context. A stream
+runs accepted jobs in whole-job FIFO order, including mixed raw/MPSGraph stages. Different streams
+can progress independently. A second in-flight launch of one exec is rejected.
+
+Accepted work retains its exec, command queue, buffers, events, workspace and logical resource
+owners through terminal completion. Destroying the public launch, exec or stream does not wait
+for GPU completion or cancel accepted work. A live launch also retains its original resource
+bindings; later patches do not change those retained bindings. Destroying the only launch handle
+discards later error reporting. Synchronization on a live handle reports deferred errors repeatedly
+and acknowledges the exec exactly once; synchronizing an older handle cannot retire a newer job.
+Successful empty and barrier-only jobs need no command buffer, though preceding FIFO jobs can
+delay them.
+
+Owner-release callbacks can run on runtime completion or cleanup threads. Callbacks must be
+thread-safe, and their code and context must outlive deferred release. Runtime locks are released
+before invoking owner callbacks. Language bindings must supply their own callback/interpreter
+lifetime discipline; this change introduces no external-framework adapter.
+
+`mgLaunchGetDiagnostics` accepts a size-versioned `mg_launch_diagnostics_t` and reports:
+
+- `sync_mode_flags`: explicit launch synchronization and requested event wait/signal modes;
+- `synchronize_count`: number of explicit synchronization calls;
+- `event_wait_count` and `event_signal_count`: requested graph ordering, not proof of submission;
+- `completed`: terminal completion observed by explicit synchronization, not proof of successful output.
+
+Before synchronization, `completed == false` does not prove the GPU is still running. Diagnostics
+never wait, signal, infer foreign completion or authorize unsynchronized reads. An error can be
+terminal; callers must inspect synchronization status as well as completion diagnostics.
+
+MPSGraph roots and graph completion are tracked. If an unaccounted root or partially submitted
+failure prevents the runtime from establishing completion, synchronization reports
+`MG_STATUS_UNSUPPORTED` with node and stage context. Until authoritative completion arrives,
+`completed` stays false, resources and reservations remain retained, and later jobs on that stream
+do not advance. This can retain resources indefinitely. The error does not authorize memory reuse.
+Automatic framework splitting and real GPU-error coverage require separate hardware validation;
+controlled continuation/failure tests do not establish either.
+
+## Native Metal Shared-Event Interoperability
+
+The Objective-C extension `metal_graph_metal.h` provides `mgMetalEventWrap` and
+`mgMetalEventGetSharedEvent`. The plain C header remains independent of Metal types.
+Wrap retains a native `MTLSharedEvent`, preserves its timeline, accepts a nil native device and
+rejects a conflicting non-nil device. Non-null output pointers are cleared on failure. Unsupported
+backends supply opaque ABI-compatible stubs. Neither function submits work, waits or signals.
+
+The getter returns the identical native event borrowed (+0) while the wrapper remains alive,
+including graph/exec/launch-owned references. ARC callers use an `__unsafe_unretained` output and
+assign it to a strong local to extend lifetime. Non-ARC callers explicitly retain/release it.
+The caller allocates timeline values: use a fresh increasing epoch for each producer. An already
+completed epoch can serve later consumers but does not order new producer work. A signal orders
+preceding work, not successful completion of an entire foreign or Metal Graph launch.
+
+Use independent queues when a consumer is submitted before its producer. Foreign event signaling,
+and separately imported native objects representing one timeline, remain caller-coordinated.
+This API is not an MLX asynchronous event interface. The runnable
+[shared-event example](../examples/metal/shared_event_bridge.mm) uses ordinary Metal and public
+Metal Graph headers only.
+
+GPU ordering does not perform transfers required by storage mode. Managed CPU writes require
+`didModifyRange:`; CPU reads of GPU-written managed storage require an externally arranged
+`synchronizeResource:` and its completion. Private storage requires a copy to host-visible storage.
+`HOST_VISIBLE` means a CPU address is available, not automatic coherence.
+
+## Write Ordering And Manual Hazards
+
+Graph validation rejects overlapping writes without an explicit dependency path. Dispatch, copy,
+fill and MPSGraph target ranges participate; unknown dispatch access is conservative. Patches
+recheck the proposed ranges against the frozen dependency graph before changing defaults. Failed
+patches leave prior state usable. Touching half-open ranges are disjoint. Native buffer identity,
+wrapped offsets and observable heap placement ranges participate in physical overlap checks.
+
+Accepted launches reserve observable write ranges before enqueue and retain their immutable
+reservations through terminal completion. Whole-job FIFO establishes same-stream ordering.
+Across streams, a conservative proof requires the same native event and exact target: a runnable
+producer with no waits and one signal after all its work, and a consumer wait before all its work.
+The target must be fresh at admission. Competing signals can invalidate a candidate; an active
+certificate blocks later competing signals. Unsupported/cyclic proofs for conflicting writers
+reject before submission. This is not general event deadlock detection or complete read/write
+hazard inference.
+
+Foreign writers, unobservable host-allocation aliases and independent aliases of an external event
+timeline require caller coordination. Callers must not make active resources aliasable or change
+their backing. Automatic-heap resources without observable placement offsets are treated
+conservatively when aliasable. Explicitly ordered untracked or heap-backed raw passes use GPU
+fences allocated before first submission. Eligible ICB work falls back to direct encoding with
+`MG_ICB_FALLBACK_MANUAL_HAZARDS` when necessary. Completion-driven mixed stages and fences may
+reduce overlap; no throughput or latency improvement is implied.

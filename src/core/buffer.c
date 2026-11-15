@@ -5,7 +5,7 @@
 
 void mg_buffer_retain(mg_buffer_t *buffer) {
     if (buffer) {
-        buffer->ref_count++;
+        __atomic_fetch_add(&buffer->ref_count, 1, __ATOMIC_RELAXED);
     }
 }
 
@@ -14,10 +14,7 @@ void mg_buffer_release(mg_buffer_t *buffer) {
         return;
     }
 
-    if (buffer->ref_count > 1) {
-        buffer->ref_count--;
-        return;
-    }
+    if (__atomic_fetch_sub(&buffer->ref_count, 1, __ATOMIC_ACQ_REL) != 1) return;
 
     mg_backend_buffer_destroy(buffer);
     if (buffer->owner_release) {
@@ -60,7 +57,7 @@ mg_status_t mgBufferGetOriginInfo(const mg_buffer_t *buffer, mg_buffer_origin_in
 
 void mg_event_retain(mg_event_t *event) {
     if (event) {
-        event->ref_count++;
+        __atomic_fetch_add(&event->ref_count, 1, __ATOMIC_RELAXED);
     }
 }
 
@@ -69,10 +66,7 @@ void mg_event_release(mg_event_t *event) {
         return;
     }
 
-    if (event->ref_count > 1) {
-        event->ref_count--;
-        return;
-    }
+    if (__atomic_fetch_sub(&event->ref_count, 1, __ATOMIC_ACQ_REL) != 1) return;
 
     mg_backend_event_destroy(event);
     free(event);
