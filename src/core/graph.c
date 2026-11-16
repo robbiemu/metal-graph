@@ -1026,6 +1026,209 @@ mg_status_t mg_graph_topological_order(const mg_graph_t *graph, size_t *order,
     return MG_STATUS_OK;
 }
 
+typedef struct mg_resource_use {
+    size_t node_index;
+    mg_node_id_t node_id;
+    const mg_buffer_t *buffer;
+    void *impl;
+    size_t absolute_offset;
+    size_t byte_count;
+    bool writes;
+} mg_resource_use_t;
+
+static bool mg_resource_access_writes(mg_resource_access_t access) {
+    return access == MG_RESOURCE_ACCESS_UNKNOWN || access == MG_RESOURCE_ACCESS_WRITE ||
+           access == MG_RESOURCE_ACCESS_READ_WRITE;
+}
+
+static mg_status_t mg_resource_uses_append(mg_resource_use_t **uses, size_t *count,
+                                           size_t *capacity, const mg_node_t *node,
+                                           const mg_buffer_t *buffer, size_t relative_offset,
+                                           size_t byte_count, bool writes, mg_error_t **out_error) {
+    if (!buffer || byte_count == 0) {
+        return MG_STATUS_OK;
+    }
+    if (relative_offset > buffer->length || byte_count > buffer->length - relative_offset ||
+        buffer->byte_offset > SIZE_MAX - relative_offset ||
+        byte_count > SIZE_MAX - (buffer->byte_offset + relative_offset)) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_TOPOLOGY, MG_ERROR_STAGE_VALIDATE,
+                            node ? node->id : MG_NODE_ID_INVALID, "node resource range is invalid",
+                            NULL);
+    }
+
+    if (*count == *capacity) {
+        size_t next_capacity = *capacity ? *capacity * 2 : 8;
+        mg_resource_use_t *next =
+            (mg_resource_use_t *)realloc(*uses, next_capacity * sizeof(*next));
+        if (!next) {
+            return mg_set_oom(out_error, MG_ERROR_STAGE_VALIDATE);
+        }
+        *uses = next;
+        *capacity = next_capacity;
+    }
+
+    (*uses)[(*count)++] = (mg_resource_use_t){
+        node->index, node->id, buffer, buffer->impl, buffer->byte_offset + relative_offset,
+        byte_count,  writes,
+    };
+    return MG_STATUS_OK;
+}
+
+static mg_status_t mg_collect_dispatch_resource_uses(const mg_node_t *node,
+                                                     mg_resource_use_t **uses, size_t *count,
+                                                     size_t *capacity, mg_error_t **out_error) {
+    const mg_dispatch_node_t *dispatch = &node->as.dispatch;
+    for (uint32_t i = 0; i < dispatch->buffer_count; ++i) {
+        const mg_buffer_binding_t *binding = &dispatch->buffers[i];
+        const mg_dispatch_resource_desc_t *resource = mg_dispatch_find_resource(
+            dispatch->resources, dispatch->resource_count, binding->index);
+        size_t relative_offset = binding->offset;
+        size_t byte_count = binding->buffer->length - binding->offset;
+        bool writes = true;
+        if (resource) {
+            if (resource->byte_offset > SIZE_MAX - binding->offset) {
+                return mg_set_error(out_error, MG_STATUS_INVALID_TOPOLOGY, MG_ERROR_STAGE_VALIDATE,
+                                    node->id, "dispatch resource range is invalid", NULL);
+            }
+            relative_offset = binding->offset + resource->byte_offset;
+            byte_count = resource->byte_count ? resource->byte_count
+                                              : binding->buffer->length - relative_offset;
+            writes = mg_resource_access_writes(resource->access);
+        }
+        mg_status_t status =
+            mg_resource_uses_append(uses, count, capacity, node, binding->buffer, relative_offset,
+                                    byte_count, writes, out_error);
+        if (status != MG_STATUS_OK) {
+            return status;
+        }
+    }
+    return MG_STATUS_OK;
+}
+
+static mg_status_t mg_collect_node_resource_uses(const mg_node_t *node, mg_resource_use_t **uses,
+                                                 size_t *count, size_t *capacity,
+                                                 mg_error_t **out_error) {
+    switch (node->kind) {
+    case MG_NODE_DISPATCH:
+        return mg_collect_dispatch_resource_uses(node, uses, count, capacity, out_error);
+    case MG_NODE_COPY: {
+        mg_status_t status = mg_resource_uses_append(uses, count, capacity, node, node->as.copy.src,
+                                                     node->as.copy.src_offset,
+                                                     node->as.copy.byte_count, false, out_error);
+        if (status != MG_STATUS_OK) {
+            return status;
+        }
+        return mg_resource_uses_append(uses, count, capacity, node, node->as.copy.dst,
+                                       node->as.copy.dst_offset, node->as.copy.byte_count, true,
+                                       out_error);
+    }
+    case MG_NODE_FILL:
+        return mg_resource_uses_append(uses, count, capacity, node, node->as.fill.dst,
+                                       node->as.fill.dst_offset, node->as.fill.byte_count, true,
+                                       out_error);
+    case MG_NODE_MPSGRAPH:
+        for (uint32_t i = 0; i < node->as.mpsgraph.feed_count; ++i) {
+            mg_mpsgraph_tensor_t *tensor = &node->as.mpsgraph.feeds[i];
+            mg_status_t status =
+                mg_resource_uses_append(uses, count, capacity, node, tensor->buffer,
+                                        tensor->byte_offset, tensor->byte_count, false, out_error);
+            if (status != MG_STATUS_OK) {
+                return status;
+            }
+        }
+        for (uint32_t i = 0; i < node->as.mpsgraph.target_count; ++i) {
+            mg_mpsgraph_tensor_t *tensor = &node->as.mpsgraph.targets[i];
+            mg_status_t status =
+                mg_resource_uses_append(uses, count, capacity, node, tensor->buffer,
+                                        tensor->byte_offset, tensor->byte_count, true, out_error);
+            if (status != MG_STATUS_OK) {
+                return status;
+            }
+        }
+        return MG_STATUS_OK;
+    default:
+        if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
+            return mg_resource_uses_append(uses, count, capacity, node, node->as.workspace_fill.dst,
+                                           node->as.workspace_fill.dst_offset,
+                                           node->as.workspace_fill.size, true, out_error);
+        }
+        return MG_STATUS_OK;
+    }
+}
+
+static mg_status_t mg_graph_validate_unordered_writes(const mg_graph_t *graph,
+                                                      mg_error_t **out_error) {
+    if (graph->node_count < 2) {
+        return MG_STATUS_OK;
+    }
+
+    if (graph->node_count > SIZE_MAX / graph->node_count) {
+        return mg_set_oom(out_error, MG_ERROR_STAGE_VALIDATE);
+    }
+    size_t reach_count = graph->node_count * graph->node_count;
+    uint8_t *reachable = (uint8_t *)calloc(reach_count, sizeof(*reachable));
+    if (!reachable) {
+        return mg_set_oom(out_error, MG_ERROR_STAGE_VALIDATE);
+    }
+    for (size_t i = 0; i < graph->edge_count; ++i) {
+        reachable[graph->edges[i].before * graph->node_count + graph->edges[i].after] = 1;
+    }
+    for (size_t k = 0; k < graph->node_count; ++k) {
+        for (size_t i = 0; i < graph->node_count; ++i) {
+            if (!reachable[i * graph->node_count + k]) {
+                continue;
+            }
+            for (size_t j = 0; j < graph->node_count; ++j) {
+                if (reachable[k * graph->node_count + j]) {
+                    reachable[i * graph->node_count + j] = 1;
+                }
+            }
+        }
+    }
+
+    mg_resource_use_t *uses = NULL;
+    size_t use_count = 0;
+    size_t use_capacity = 0;
+    for (size_t i = 0; i < graph->node_count; ++i) {
+        mg_status_t status = mg_collect_node_resource_uses(graph->nodes[i], &uses, &use_count,
+                                                           &use_capacity, out_error);
+        if (status != MG_STATUS_OK) {
+            free(uses);
+            free(reachable);
+            return status;
+        }
+    }
+
+    for (size_t i = 0; i < use_count; ++i) {
+        if (!uses[i].writes) {
+            continue;
+        }
+        for (size_t j = i + 1; j < use_count; ++j) {
+            if (!uses[j].writes || uses[i].node_index == uses[j].node_index) {
+                continue;
+            }
+            bool ordered = reachable[uses[i].node_index * graph->node_count + uses[j].node_index] ||
+                           reachable[uses[j].node_index * graph->node_count + uses[i].node_index];
+            if (ordered || !mg_backend_physical_overlap(
+                               uses[i].buffer, uses[i].absolute_offset, uses[i].byte_count,
+                               uses[j].buffer, uses[j].absolute_offset, uses[j].byte_count)) {
+                continue;
+            }
+            mg_node_id_t node_id =
+                uses[i].node_id < uses[j].node_id ? uses[i].node_id : uses[j].node_id;
+            free(uses);
+            free(reachable);
+            return mg_set_error(out_error, MG_STATUS_INVALID_TOPOLOGY, MG_ERROR_STAGE_VALIDATE,
+                                node_id, "overlapping writes require explicit dependency ordering",
+                                NULL);
+        }
+    }
+
+    free(uses);
+    free(reachable);
+    return MG_STATUS_OK;
+}
+
 mg_status_t mgGraphValidate(const mg_graph_t *graph, mg_error_t **out_error) {
     mg_clear_error(out_error);
     if (!graph) {
@@ -1044,5 +1247,8 @@ mg_status_t mgGraphValidate(const mg_graph_t *graph, mg_error_t **out_error) {
 
     mg_status_t status = mg_graph_topological_order(graph, order, out_error);
     free(order);
-    return status;
+    if (status != MG_STATUS_OK) {
+        return status;
+    }
+    return mg_graph_validate_unordered_writes(graph, out_error);
 }

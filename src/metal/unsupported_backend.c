@@ -65,6 +65,35 @@ mg_status_t mgEventCreate(mg_device_t *device, mg_event_t **out_event, mg_error_
 
 void mg_backend_event_destroy(mg_event_t *event) { (void)event; }
 
+/* ABI-compatible stubs for the Objective-C Metal extension. Native object pointers stay opaque
+ * here so the unsupported backend never imports Objective-C/Metal headers. */
+MG_API mg_status_t mgMetalEventWrap(mg_device_t *device, void *shared_event, mg_event_t **out_event,
+                                    mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (out_event)
+        *out_event = NULL;
+    if (!device || !shared_event || !out_event) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "device, shared event and output are required",
+                            NULL);
+    }
+    return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_CREATE, MG_NODE_ID_INVALID,
+                        "Metal shared events require the Metal backend", NULL);
+}
+
+MG_API mg_status_t mgMetalEventGetSharedEvent(const mg_event_t *event, void **out_event,
+                                              mg_error_t **out_error) {
+    mg_clear_error(out_error);
+    if (out_event)
+        *out_event = NULL;
+    if (!event || !out_event) {
+        return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_CREATE,
+                            MG_NODE_ID_INVALID, "event and native event output are required", NULL);
+    }
+    return mg_set_error(out_error, MG_STATUS_UNSUPPORTED, MG_ERROR_STAGE_CREATE, MG_NODE_ID_INVALID,
+                        "Metal shared events require the Metal backend", NULL);
+}
+
 mg_status_t mgGraphInstantiate(mg_graph_t *graph, mg_device_t *device, mg_graph_exec_t **out_exec,
                                mg_error_t **out_error) {
     mg_clear_error(out_error);
@@ -107,3 +136,10 @@ mg_status_t mgLaunchSynchronize(mg_launch_t *launch, mg_error_t **out_error) {
 void mg_backend_launch_destroy(mg_launch_t *launch) { (void)launch; }
 
 void mgLaunchDestroy(mg_launch_t *launch) { free(launch); }
+
+bool mg_backend_physical_overlap(const mg_buffer_t *a, size_t ao, size_t ac, const mg_buffer_t *b,
+                                 size_t bo, size_t bc) {
+    if (!a || !b || !ac || !bc || (a != b && (!a->impl || a->impl != b->impl)))
+        return false;
+    return ao <= bo ? bo - ao < ac : ao - bo < bc;
+}

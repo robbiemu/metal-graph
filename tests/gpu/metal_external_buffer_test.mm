@@ -7,6 +7,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 static void print_error(const char *label, mg_status_t status, mg_error_t *error) {
     fprintf(stderr, "%s failed: %s", label, mgStatusString(status));
@@ -176,6 +178,40 @@ static int test_invalid_wrap_ranges(mg_device_t *device, id<MTLDevice> metalDevi
     return 0;
 }
 
+static int test_external_buffer_device_mismatch_rejects(mg_device_t *device,
+                                                        id<MTLDevice> metalDevice) {
+    mg_error_t *error = NULL;
+    mg_buffer_t *wrapped = NULL;
+    id<MTLDevice> otherDevice = nil;
+
+    NSArray<id<MTLDevice>> *devices = MTLCopyAllDevices();
+    for (id<MTLDevice> candidate in devices) {
+        if (candidate != metalDevice) {
+            otherDevice = candidate;
+            break;
+        }
+    }
+    if (!otherDevice) {
+        fprintf(stderr, "skipping device mismatch rejection: only one Metal device is available\n");
+        return 0;
+    }
+
+    id<MTLBuffer> otherBuffer = [otherDevice newBufferWithLength:16
+                                                         options:MTLResourceStorageModeShared];
+    if (!otherBuffer) {
+        fprintf(stderr, "failed to create Metal buffer for device mismatch test\n");
+        return 1;
+    }
+
+    mg_metal_buffer_wrap_desc_t desc = wrap_desc(otherBuffer, 0, 16);
+    if (expect_status(mgMetalBufferWrap(device, &desc, &wrapped, &error),
+                      MG_STATUS_INVALID_ARGUMENT, "reject device mismatch wrap", &error)) {
+        mgBufferDestroy(wrapped);
+        return 1;
+    }
+    return 0;
+}
+
 static int test_external_dispatch_copy_and_fill(mg_device_t *device, mg_stream_t *stream,
                                                 id<MTLDevice> metalDevice) {
     int rc = 1;
@@ -267,7 +303,7 @@ static int test_external_dispatch_copy_and_fill(mg_device_t *device, mg_stream_t
     exec = NULL;
     mgGraphDestroy(graph);
     graph = NULL;
-    memset(values, 0, sizeof(initial));
+    memcpy(values, initial, sizeof(initial));
 
     if (expect_status(mgGraphCreate(&graph, &error), MG_STATUS_OK, "create fill graph", &error)) {
         goto cleanup;
@@ -433,6 +469,399 @@ cleanup:
     return rc;
 }
 
+typedef struct patch_owner_counts {
+    int retains, releases;
+} patch_owner_counts_t;
+static void patch_owner_retain(void *context) {
+    __atomic_fetch_add(&((patch_owner_counts_t *)context)->retains, 1, __ATOMIC_RELAXED);
+}
+static void patch_owner_release(void *context) {
+    __atomic_fetch_add(&((patch_owner_counts_t *)context)->releases, 1, __ATOMIC_RELEASE);
+}
+
+static int test_patch_hazards_gpu(mg_device_t *device, mg_stream_t *stream, id<MTLDevice> metal) {
+    int rc = 1;
+    mg_error_t *error = NULL;
+    mg_buffer_t *a = NULL, *alias = NULL, *old = NULL;
+    mg_graph_t *graph = NULL;
+    mg_graph_exec_t *exec = NULL;
+    mg_launch_t *launch = NULL;
+    mg_node_t *fillNode = NULL, *dispatchNode = NULL, *barrier = NULL;
+    mg_node_id_t dispatchId = MG_NODE_ID_INVALID, fillId = MG_NODE_ID_INVALID;
+    patch_owner_counts_t owner = {0};
+    mg_metal_buffer_wrap_desc_t wd;
+    id<MTLBuffer> native = [metal newBufferWithLength:128 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> oldNative = [metal newBufferWithLength:64 options:MTLResourceStorageModeShared];
+    if (!native || !oldNative)
+        goto cleanup;
+    memset([native contents], 0, 128);
+    memset([oldNative contents], 0, 64);
+    wd = wrap_desc(native, 16, 64);
+    if (expect_status(mgMetalBufferWrap(device, &wd, &a, &error), MG_STATUS_OK, "wrap A", &error))
+        goto cleanup;
+    wd = wrap_desc(native, 32, 64);
+    wd.flags |= MG_METAL_BUFFER_WRAP_RETAIN_OWNER;
+    wd.owner_context = &owner;
+    wd.owner_retain = patch_owner_retain;
+    wd.owner_release = patch_owner_release;
+    if (expect_status(mgMetalBufferWrap(device, &wd, &alias, &error), MG_STATUS_OK, "wrap alias",
+                      &error))
+        goto cleanup;
+    wd = wrap_desc(oldNative, 0, 64);
+    if (expect_status(mgMetalBufferWrap(device, &wd, &old, &error), MG_STATUS_OK, "wrap old",
+                      &error))
+        goto cleanup;
+    {
+        mg_fill_desc_t fill = {
+            .size = sizeof(fill), .dst = a, .dst_offset = 16, .byte_count = 16, .value = 0x55};
+        mg_buffer_binding_t binding;
+        mg_dispatch_resource_desc_t resource;
+        mg_dispatch_desc_t dispatch = add_one_desc(old, &binding, &resource);
+        if (expect_status(mgGraphCreate(&graph, &error), MG_STATUS_OK, "patch graph", &error) ||
+            expect_status(mgGraphAddFillNode(graph, &fill, &fillNode, &error), MG_STATUS_OK,
+                          "patch fill", &error) ||
+            expect_status(mgGraphAddDispatchNode(graph, &dispatch, &dispatchNode, &error),
+                          MG_STATUS_OK, "patch dispatch", &error) ||
+            expect_status(
+                mgGraphSetNodePatchFlags(graph, dispatchNode, MG_PATCH_DISPATCH_BUFFER, &error),
+                MG_STATUS_OK, "patch flag", &error))
+            goto cleanup;
+        dispatchId = mgNodeId(dispatchNode);
+        if (expect_status(mgGraphInstantiate(graph, device, &exec, &error), MG_STATUS_OK,
+                          "instantiate unordered", &error))
+            goto cleanup;
+        mgGraphDestroy(graph);
+        graph = NULL;
+        if (expect_status(mgGraphExecPatchDispatchBuffer(exec, dispatchId, 0, alias, 0, &error),
+                          MG_STATUS_INVALID_TOPOLOGY, "reject alias overlap", &error) ||
+            alias->ref_count != 1)
+            goto cleanup;
+        mgBufferDestroy(alias);
+        alias = NULL;
+        if (__atomic_load_n(&owner.retains, __ATOMIC_ACQUIRE) != 1 ||
+            __atomic_load_n(&owner.releases, __ATOMIC_ACQUIRE) != 1)
+            goto cleanup;
+        wd = wrap_desc(native, 32, 64);
+        wd.flags |= MG_METAL_BUFFER_WRAP_RETAIN_OWNER;
+        wd.owner_context = &owner;
+        wd.owner_retain = patch_owner_retain;
+        wd.owner_release = patch_owner_release;
+        if (expect_status(mgMetalBufferWrap(device, &wd, &alias, &error), MG_STATUS_OK,
+                          "rewrap alias", &error) ||
+            expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
+                          "launch after rejection", &error) ||
+            expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK, "sync after rejection",
+                          &error))
+            goto cleanup;
+        mgLaunchDestroy(launch);
+        launch = NULL;
+        uint32_t *oldValues = (uint32_t *)[oldNative contents];
+        if (oldValues[0] != 1 || oldValues[1] != 1 || oldValues[2] != 1 || oldValues[3] != 1 ||
+            ((uint8_t *)[native contents])[32] != 0x55 ||
+            __atomic_load_n(&owner.retains, __ATOMIC_ACQUIRE) != 2 ||
+            __atomic_load_n(&owner.releases, __ATOMIC_ACQUIRE) != 1)
+            goto cleanup;
+        mgGraphExecDestroy(exec);
+        exec = NULL;
+        /* A single patchable dispatch remains ineligible for ICB before and after patching. */
+        if (expect_status(mgGraphCreate(&graph, &error), MG_STATUS_OK, "ICB patch graph", &error) ||
+            expect_status(mgGraphAddDispatchNode(graph, &dispatch, &dispatchNode, &error),
+                          MG_STATUS_OK, "ICB patch node", &error) ||
+            expect_status(
+                mgGraphSetNodePatchFlags(graph, dispatchNode, MG_PATCH_DISPATCH_BUFFER, &error),
+                MG_STATUS_OK, "ICB patch flag", &error))
+            goto cleanup;
+        dispatchId = mgNodeId(dispatchNode);
+        if (expect_status(mgGraphInstantiate(graph, device, &exec, &error), MG_STATUS_OK,
+                          "instantiate ICB patch graph", &error))
+            goto cleanup;
+        mgGraphDestroy(graph);
+        graph = NULL;
+        mg_graph_exec_diagnostics_t diag = {.size = sizeof(diag)};
+        if (expect_status(mgGraphExecGetDiagnostics(exec, &diag, &error), MG_STATUS_OK,
+                          "ICB patch diagnostics", &error) ||
+            diag.icb_groups_fallback != 1 ||
+            (diag.icb_available &&
+             diag.icb_last_fallback_reason != MG_ICB_FALLBACK_PATCHABLE_FIELD) ||
+            expect_status(mgGraphExecPatchDispatchBuffer(exec, dispatchId, 0, alias, 16, &error),
+                          MG_STATUS_OK, "ICB safe patch", &error) ||
+            expect_status(mgGraphExecGetDiagnostics(exec, &diag, &error), MG_STATUS_OK,
+                          "ICB patched diagnostics", &error) ||
+            diag.icb_groups_fallback != 1 ||
+            (diag.icb_available &&
+             diag.icb_last_fallback_reason != MG_ICB_FALLBACK_PATCHABLE_FIELD))
+            goto cleanup;
+        mgGraphExecDestroy(exec);
+        exec = NULL;
+        memset([native contents], 0, 128);
+        /* Creation order differs from topological order: dispatch -> barrier -> fill. */
+        if (expect_status(mgGraphCreate(&graph, &error), MG_STATUS_OK, "ordered graph", &error) ||
+            expect_status(mgGraphAddFillNode(graph, &fill, &fillNode, &error), MG_STATUS_OK,
+                          "ordered fill", &error) ||
+            expect_status(mgGraphAddDispatchNode(graph, &dispatch, &dispatchNode, &error),
+                          MG_STATUS_OK, "ordered dispatch", &error) ||
+            expect_status(mgGraphAddBarrierNode(graph, &barrier, &error), MG_STATUS_OK,
+                          "ordered barrier", &error) ||
+            expect_status(mgGraphAddDependency(graph, dispatchNode, barrier, &error), MG_STATUS_OK,
+                          "first dependency", &error) ||
+            expect_status(mgGraphAddDependency(graph, barrier, fillNode, &error), MG_STATUS_OK,
+                          "second dependency", &error) ||
+            expect_status(
+                mgGraphSetNodePatchFlags(graph, dispatchNode, MG_PATCH_DISPATCH_BUFFER, &error),
+                MG_STATUS_OK, "ordered flag", &error) ||
+            expect_status(mgGraphSetNodePatchFlags(graph, fillNode, MG_PATCH_FILL_RANGE, &error),
+                          MG_STATUS_OK, "ordered fill flag", &error))
+            goto cleanup;
+        dispatchId = mgNodeId(dispatchNode);
+        fillId = mgNodeId(fillNode);
+        if (expect_status(mgGraphInstantiate(graph, device, &exec, &error), MG_STATUS_OK,
+                          "instantiate ordered", &error))
+            goto cleanup;
+        mgGraphDestroy(graph);
+        graph = NULL;
+        if (expect_status(mgGraphExecPatchDispatchBuffer(exec, dispatchId, 0, alias, 0, &error),
+                          MG_STATUS_OK, "transitive ordered overlap after graph destruction",
+                          &error))
+            goto cleanup;
+        fill.dst_offset = 20;
+        fill.byte_count = 12;
+        if (expect_status(mgGraphExecPatchFillNode(exec, fillId, &fill, &error), MG_STATUS_OK,
+                          "transitive ancestor overlap after graph destruction", &error))
+            goto cleanup;
+        mgBufferDestroy(alias);
+        alias = NULL;
+        if (__atomic_load_n(&owner.releases, __ATOMIC_ACQUIRE) != 1 ||
+            expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
+                          "ordered launch", &error) ||
+            expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK, "ordered sync",
+                          &error))
+            goto cleanup;
+        if (*(uint32_t *)((uint8_t *)[native contents] + 32) != 1 ||
+            ((uint8_t *)[native contents])[36] != 0x55 ||
+            ((uint8_t *)[native contents])[47] != 0x55 || ((uint8_t *)[native contents])[48] != 0)
+            goto cleanup;
+    }
+    rc = 0;
+cleanup:
+    mgLaunchDestroy(launch);
+    mgGraphExecDestroy(exec);
+    mgGraphDestroy(graph);
+    mgBufferDestroy(a);
+    mgBufferDestroy(alias);
+    mgBufferDestroy(old);
+    mgErrorDestroy(error);
+    {
+        struct timespec start, now;
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        while (__atomic_load_n(&owner.retains, __ATOMIC_ACQUIRE) !=
+               __atomic_load_n(&owner.releases, __ATOMIC_ACQUIRE)) {
+            usleep(1000);
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            if (now.tv_sec - start.tv_sec >= 5) {
+                fprintf(stderr, "patch owner release timeout\n");
+                return 1;
+            }
+        }
+    }
+    if (rc)
+        fprintf(stderr, "GPU patch hazard test failed\n");
+    return rc;
+}
+
+static int test_copy_fill_patch_hazards_gpu(mg_device_t *device, mg_stream_t *stream,
+                                            id<MTLDevice> metal) {
+    int rc = 1;
+    mg_error_t *error = NULL;
+    mg_buffer_t *a = NULL, *alias = NULL, *old = NULL;
+    mg_graph_t *graph = NULL;
+    mg_graph_exec_t *exec = NULL;
+    mg_launch_t *launch = NULL;
+    mg_metal_buffer_wrap_desc_t wd;
+    id<MTLBuffer> native = [metal newBufferWithLength:128 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> oldNative = [metal newBufferWithLength:64 options:MTLResourceStorageModeShared];
+    if (!native || !oldNative)
+        goto cleanup;
+    wd = wrap_desc(native, 16, 64);
+    if (expect_status(mgMetalBufferWrap(device, &wd, &a, &error), MG_STATUS_OK, "copy/fill wrap",
+                      &error))
+        goto cleanup;
+    wd = wrap_desc(native, 32, 64);
+    if (expect_status(mgMetalBufferWrap(device, &wd, &alias, &error), MG_STATUS_OK,
+                      "copy/fill alias", &error))
+        goto cleanup;
+    wd = wrap_desc(oldNative, 0, 64);
+    if (expect_status(mgMetalBufferWrap(device, &wd, &old, &error), MG_STATUS_OK, "copy/fill old",
+                      &error))
+        goto cleanup;
+    for (int which = 0; which < 3; ++which) {
+        mg_node_t *opponent = NULL, *candidate = NULL;
+        mg_fill_desc_t opponentDesc = {.size = sizeof(opponentDesc),
+                                       .dst = a,
+                                       .dst_offset = 16,
+                                       .byte_count = 16,
+                                       .value = 0x55};
+        mg_fill_desc_t fill = {.size = sizeof(fill),
+                               .dst = which == 1 ? alias : old,
+                               .dst_offset = which == 1 ? (size_t)16 : (size_t)8,
+                               .byte_count = 8,
+                               .value = 0x66};
+        mg_copy_desc_t copy = {.size = sizeof(copy),
+                               .src = old,
+                               .src_offset = 0,
+                               .dst = old,
+                               .dst_offset = 16,
+                               .byte_count = 8};
+        memset([native contents], 0, 128);
+        memset([oldNative contents], 0x23, 64);
+        if (which == 2)
+            memset([oldNative contents], 0xa1, 8);
+        if (expect_status(mgGraphCreate(&graph, &error), MG_STATUS_OK, "copy/fill graph", &error) ||
+            expect_status(mgGraphAddFillNode(graph, &opponentDesc, &opponent, &error), MG_STATUS_OK,
+                          "copy/fill opponent", &error))
+            goto cleanup;
+        if (which == 2) {
+            if (expect_status(mgGraphAddCopyNode(graph, &copy, &candidate, &error), MG_STATUS_OK,
+                              "copy candidate", &error) ||
+                expect_status(mgGraphSetNodePatchFlags(graph, candidate,
+                                                       MG_PATCH_COPY_BUFFER | MG_PATCH_COPY_RANGE,
+                                                       &error),
+                              MG_STATUS_OK, "copy flags", &error))
+                goto cleanup;
+        } else {
+            if (expect_status(mgGraphAddFillNode(graph, &fill, &candidate, &error), MG_STATUS_OK,
+                              "fill candidate", &error) ||
+                expect_status(mgGraphSetNodePatchFlags(graph, candidate,
+                                                       MG_PATCH_FILL_BUFFER | MG_PATCH_FILL_RANGE,
+                                                       &error),
+                              MG_STATUS_OK, "fill flags", &error))
+                goto cleanup;
+        }
+        mg_node_id_t id = mgNodeId(candidate);
+        if (expect_status(mgGraphInstantiate(graph, device, &exec, &error), MG_STATUS_OK,
+                          "instantiate copy/fill", &error))
+            goto cleanup;
+        mgGraphDestroy(graph);
+        graph = NULL;
+        if (which == 2) {
+            copy.dst = alias;
+            copy.dst_offset = 8;
+            if (expect_status(mgGraphExecPatchCopyNode(exec, id, &copy, &error),
+                              MG_STATUS_INVALID_TOPOLOGY, "reject copy alias", &error))
+                goto cleanup;
+        } else {
+            fill.dst = alias;
+            fill.dst_offset = 8;
+            if (expect_status(mgGraphExecPatchFillNode(exec, id, &fill, &error),
+                              MG_STATUS_INVALID_TOPOLOGY, "reject fill alias", &error))
+                goto cleanup;
+        }
+        if (expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK,
+                          "copy/fill launch after rejection", &error) ||
+            expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK, "copy/fill sync",
+                          &error))
+            goto cleanup;
+        if (((uint8_t *)[native contents])[32] != 0x55 ||
+            (which == 0 && ((uint8_t *)[oldNative contents])[8] != 0x66) ||
+            (which == 1 && ((uint8_t *)[native contents])[48] != 0x66) ||
+            (which == 2 && (((uint8_t *)[oldNative contents])[16] != 0xa1 ||
+                            ((uint8_t *)[oldNative contents])[23] != 0xa1 ||
+                            ((uint8_t *)[oldNative contents])[24] != 0x23)))
+            goto cleanup;
+        mgLaunchDestroy(launch);
+        launch = NULL;
+        mgGraphExecDestroy(exec);
+        exec = NULL;
+    }
+    rc = 0;
+cleanup:
+    mgLaunchDestroy(launch);
+    mgGraphExecDestroy(exec);
+    mgGraphDestroy(graph);
+    mgBufferDestroy(a);
+    mgBufferDestroy(alias);
+    mgBufferDestroy(old);
+    mgErrorDestroy(error);
+    if (rc)
+        fprintf(stderr, "GPU copy/fill patch hazard test failed\n");
+    return rc;
+}
+
+static int test_icb_completed_destroy(mg_device_t *device, mg_stream_t *stream,
+                                      id<MTLDevice> metal) {
+    int rc = 1;
+    mg_error_t *error = NULL;
+    mg_buffer_t *wrapped = NULL;
+    mg_graph_t *graph = NULL;
+    mg_graph_exec_t *exec = NULL;
+    mg_launch_t *launch = NULL;
+    mg_node_t *node = NULL;
+    mg_buffer_binding_t binding = {};
+    mg_dispatch_resource_desc_t resource = {};
+    mg_dispatch_desc_t dispatch = {};
+    mg_metal_buffer_wrap_desc_t wd = {};
+    id<MTLBuffer> native = [metal newBufferWithLength:16 options:MTLResourceStorageModeShared];
+    if (!native)
+        goto cleanup;
+    memset([native contents], 0, 16);
+    wd = wrap_desc(native, 0, 16);
+    if (expect_status(mgMetalBufferWrap(device, &wd, &wrapped, &error), MG_STATUS_OK, "ICB wrap",
+                      &error) ||
+        expect_status(mgGraphCreate(&graph, &error), MG_STATUS_OK, "ICB graph", &error))
+        goto cleanup;
+    dispatch = add_one_desc(wrapped, &binding, &resource);
+    if (expect_status(mgGraphAddDispatchNode(graph, &dispatch, &node, &error), MG_STATUS_OK,
+                      "ICB node", &error) ||
+        expect_status(mgGraphInstantiate(graph, device, &exec, &error), MG_STATUS_OK,
+                      "ICB instantiate", &error) ||
+        expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK, "ICB launch",
+                      &error))
+        goto cleanup;
+    {
+        struct timespec start, now;
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        while (__atomic_load_n(&exec->in_flight_count, __ATOMIC_ACQUIRE) != 0) {
+            usleep(1000);
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            if (now.tv_sec - start.tv_sec >= 5)
+                _Exit(4);
+        }
+    }
+    fprintf(stderr, "ICB completed-destroy: used=%u fallback=%u\n", exec->icb.groups_used,
+            exec->icb.groups_fallback);
+    if (((uint32_t *)[native contents])[0] != 1 ||
+        __atomic_load_n(&exec->ref_count, __ATOMIC_ACQUIRE) != 2 ||
+        __atomic_load_n(&exec->in_flight_count, __ATOMIC_ACQUIRE) > 1)
+        goto cleanup;
+    mgLaunchDestroy(launch);
+    launch = NULL;
+    {
+        struct timespec start, now;
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        while (__atomic_load_n(&exec->ref_count, __ATOMIC_ACQUIRE) != 1) {
+            usleep(1000);
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            if (now.tv_sec - start.tv_sec >= 5)
+                goto cleanup;
+        }
+    }
+    if (__atomic_load_n(&exec->in_flight_count, __ATOMIC_ACQUIRE) != 0 ||
+        expect_status(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK, "ICB relaunch",
+                      &error) ||
+        expect_status(mgLaunchSynchronize(launch, &error), MG_STATUS_OK, "ICB resync", &error) ||
+        ((uint32_t *)[native contents])[0] != 2)
+        goto cleanup;
+    rc = 0;
+cleanup:
+    mgLaunchDestroy(launch);
+    mgGraphExecDestroy(exec);
+    mgGraphDestroy(graph);
+    mgBufferDestroy(wrapped);
+    mgErrorDestroy(error);
+    if (rc)
+        fprintf(stderr, "ICB completed destroy failed\n");
+    return rc;
+}
+
 int main(void) {
     @autoreleasepool {
         int rc = 1;
@@ -454,13 +883,18 @@ int main(void) {
         }
 
         metalDevice = (__bridge id<MTLDevice>)device->impl;
-        if (test_shared_buffer_origin(device) ||
-            test_invalid_wrap_ranges(device, metalDevice) ||
+        fprintf(stderr, "Metal device: %s\n", [[metalDevice name] UTF8String]);
+        if (test_shared_buffer_origin(device) || test_invalid_wrap_ranges(device, metalDevice) ||
+            test_external_buffer_device_mismatch_rejects(device, metalDevice) ||
             test_external_dispatch_copy_and_fill(device, stream, metalDevice) ||
-            test_exec_and_launch_retain_external_storage(device, stream, metalDevice)) {
+            test_exec_and_launch_retain_external_storage(device, stream, metalDevice) ||
+            test_patch_hazards_gpu(device, stream, metalDevice) ||
+            test_copy_fill_patch_hazards_gpu(device, stream, metalDevice) ||
+            test_icb_completed_destroy(device, stream, metalDevice)) {
             goto cleanup;
         }
 
+        fprintf(stderr, "external buffer and patch hazard GPU tests passed\n");
         rc = 0;
 
     cleanup:

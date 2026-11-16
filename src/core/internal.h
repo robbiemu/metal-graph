@@ -102,6 +102,7 @@ struct mg_device {
 
 struct mg_stream {
     void *impl;
+    void *scheduler_impl; /* retained backend stream scheduler */
 };
 
 struct mg_buffer {
@@ -275,10 +276,23 @@ typedef struct mg_icb_plan {
 struct mg_graph_exec {
     mg_exec_node_t *nodes;
     size_t node_count;
+    mg_edge_t *edges; /* dependency endpoints indexed by executable node order */
+    size_t edge_count;
     void *device_impl;
     mg_workspace_plan_t workspace;
     mg_icb_plan_t icb;
     uint32_t in_flight_count;
+    uint32_t ref_count;            /* caller ownership plus successfully returned launches */
+    uint32_t test_certified_count; /* internal test observation */
+    uint8_t test_fence_failure;    /* internal per-exec injection */
+    void *test_completion_hold;    /* borrowed, per-exec test semaphore */
+    void *test_unknown_unit;       /* retained only by the controlled unknown-root fixture */
+    uint8_t test_stage_failure;
+    uint8_t test_preflight_failure; /* 1: native metadata, 2: queue gate */
+    uint8_t test_raw_failure;       /* private, per-exec deterministic test seam */
+    uint8_t test_mps_continuations;
+    uint8_t test_mps_failure;
+    uint32_t test_mps_observed_roots;
 };
 
 struct mg_launch {
@@ -287,12 +301,18 @@ struct mg_launch {
     size_t impl_count;
     size_t impl_capacity;
     mg_graph_exec_t *exec;
+    void *tracker_impl; /* retained backend completion tracker */
+    bool async_job;     /* accepted scheduler job; public handle never owns its mutable roots */
     bool completed;
     mg_buffer_t **retained_buffers;
     size_t retained_buffer_count;
     mg_event_t **retained_events;
     size_t retained_event_count;
     void *retained_workspace_impl;
+    mg_sync_mode_flags_t sync_mode_flags;
+    uint32_t synchronize_count;
+    uint32_t event_wait_count;
+    uint32_t event_signal_count;
 };
 
 char *mg_strdup(const char *value);
@@ -347,7 +367,19 @@ void mg_backend_buffer_destroy(mg_buffer_t *buffer);
 void mg_backend_event_destroy(mg_event_t *event);
 void mg_backend_graph_exec_destroy(mg_graph_exec_t *exec);
 void mg_backend_launch_destroy(mg_launch_t *launch);
+/* Internal deterministic test seam; not part of the public ABI. */
+void mg_test_fail_next_raw_after_commit(mg_graph_exec_t *exec);
+void mg_test_fail_next_raw_before_commit(mg_graph_exec_t *exec);
+void mg_test_fail_next_raw_registration(mg_graph_exec_t *exec);
+bool mg_test_tracker_seal_zero_pending(mg_graph_exec_t *exec, mg_stream_t *stream);
+void mg_test_set_mps_continuations(mg_graph_exec_t *exec, uint8_t count);
+void mg_test_fail_mps_new_root(mg_graph_exec_t *exec);
+void mg_test_set_mps_failure(mg_graph_exec_t *exec, uint8_t mode);
+void mg_test_resolve_unknown_root(mg_graph_exec_t *exec);
 void *mg_backend_buffer_contents(mg_buffer_t *buffer);
+/* Offsets are native-buffer relative. */
+bool mg_backend_physical_overlap(const mg_buffer_t *a, size_t ao, size_t ac, const mg_buffer_t *b,
+                                 size_t bo, size_t bc);
 
 #ifdef __cplusplus
 }
