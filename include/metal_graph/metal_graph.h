@@ -481,14 +481,16 @@ MG_API mg_status_t mgGraphLaunch(mg_graph_exec_t *exec, mg_stream_t *stream,
                                  mg_launch_t **out_launch, mg_error_t **out_error);
 /* An UNSUPPORTED accounting error can return before physical completion is established. In that
  * case diagnostics.completed remains false, resources and the stream remain retained/blocked,
- * and a repeated synchronization reports the error; this result does not authorize resource reuse. */
+ * and a repeated synchronization reports the error; this result does not authorize resource reuse.
+ */
 MG_API mg_status_t mgLaunchSynchronize(mg_launch_t *launch, mg_error_t **out_error);
 MG_API mg_status_t mgLaunchGetDiagnostics(const mg_launch_t *launch,
                                           mg_launch_diagnostics_t *out_diagnostics,
                                           mg_error_t **out_error);
 /* Releases launch ownership without waiting. Accepted work retains its exec, queue and graph
  * resources through terminal completion even if this handle is destroyed early. Destroying the
- * handle discards later error reporting; synchronize while it is live to receive deferred errors. */
+ * handle discards later error reporting; synchronize while it is live to receive deferred errors.
+ */
 MG_API void mgLaunchDestroy(mg_launch_t *launch);
 
 #ifdef __cplusplus

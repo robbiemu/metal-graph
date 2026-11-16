@@ -1,7 +1,7 @@
 #include "internal.h"
 
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 static bool mg_patch_range_valid(size_t length, size_t offset, size_t byte_count) {
     return byte_count > 0 && offset <= length && byte_count <= length - offset;
@@ -82,9 +82,10 @@ static mg_status_t mg_patch_require_flag(mg_patch_flags_t flags, mg_patch_flags_
 }
 
 /* Compare half-open absolute ranges without adding their ends. */
-static bool mg_patch_write_overlap(const mg_buffer_t *a, size_t ao, size_t ac,
-                                   const mg_buffer_t *b, size_t bo, size_t bc) {
-    if (!a || !b || !ac || !bc) return false;
+static bool mg_patch_write_overlap(const mg_buffer_t *a, size_t ao, size_t ac, const mg_buffer_t *b,
+                                   size_t bo, size_t bc) {
+    if (!a || !b || !ac || !bc)
+        return false;
     if (ao > a->length || ac > a->length - ao || bo > b->length || bc > b->length - bo ||
         a->byte_offset > SIZE_MAX - ao || b->byte_offset > SIZE_MAX - bo)
         return true; /* Conservatively reject unrepresentable ranges. */
@@ -105,19 +106,23 @@ static mg_status_t mg_patch_check_write(mg_graph_exec_t *exec, mg_exec_node_t *p
                             "patch write range overflows", NULL);
     size_t pi = (size_t)(patched - exec->nodes);
     uint8_t *related = (uint8_t *)calloc(exec->node_count, 1);
-    if (!related) return mg_set_oom(out_error, MG_ERROR_STAGE_PATCH);
+    if (!related)
+        return mg_set_oom(out_error, MG_ERROR_STAGE_PATCH);
     related[pi] = 3;
     /* Executable order is topological, so each direction needs one pass. */
     for (size_t i = pi; i < exec->node_count; ++i)
         if (related[i] & 1)
             for (size_t e = 0; e < exec->edge_count; ++e)
-                if (exec->edges[e].before == i) related[exec->edges[e].after] |= 1;
-    for (size_t i = pi + 1; i-- > 0; )
+                if (exec->edges[e].before == i)
+                    related[exec->edges[e].after] |= 1;
+    for (size_t i = pi + 1; i-- > 0;)
         if (related[i] & 2)
             for (size_t e = 0; e < exec->edge_count; ++e)
-                if (exec->edges[e].after == i) related[exec->edges[e].before] |= 2;
+                if (exec->edges[e].after == i)
+                    related[exec->edges[e].before] |= 2;
     for (size_t i = 0; i < exec->node_count; ++i) {
-        if (related[i]) continue;
+        if (related[i])
+            continue;
         mg_exec_node_t *other = &exec->nodes[i];
         bool overlap = false;
         switch (other->kind) {
@@ -127,13 +132,20 @@ static mg_status_t mg_patch_check_write(mg_graph_exec_t *exec, mg_exec_node_t *p
                 mg_buffer_binding_t *b = &d->buffers[j];
                 const mg_dispatch_resource_desc_t *r =
                     mg_dispatch_find_resource(d->resources, d->resource_count, b->index);
-                if (r && r->access == MG_RESOURCE_ACCESS_READ) continue;
+                if (r && r->access == MG_RESOURCE_ACCESS_READ)
+                    continue;
                 size_t off = b->offset;
                 if (r) {
-                    if (r->byte_offset > SIZE_MAX - off) { overlap = true; break; }
+                    if (r->byte_offset > SIZE_MAX - off) {
+                        overlap = true;
+                        break;
+                    }
                     off += r->byte_offset;
                 }
-                if (off > b->buffer->length) { overlap = true; break; }
+                if (off > b->buffer->length) {
+                    overlap = true;
+                    break;
+                }
                 size_t len = r && r->byte_count ? r->byte_count : b->buffer->length - off;
                 overlap = mg_patch_write_overlap(buffer, offset, count, b->buffer, off, len);
             }
@@ -156,9 +168,9 @@ static mg_status_t mg_patch_check_write(mg_graph_exec_t *exec, mg_exec_node_t *p
             break;
         default:
             if ((int)other->kind == MG_NODE_INTERNAL_WORKSPACE_FILL)
-                overlap = mg_patch_write_overlap(buffer, offset, count,
-                    other->as.workspace_fill.dst, other->as.workspace_fill.dst_offset,
-                    other->as.workspace_fill.size);
+                overlap = mg_patch_write_overlap(
+                    buffer, offset, count, other->as.workspace_fill.dst,
+                    other->as.workspace_fill.dst_offset, other->as.workspace_fill.size);
             break;
         }
         if (overlap) {
@@ -259,10 +271,11 @@ mg_status_t mgGraphExecPatchDispatchBuffer(mg_graph_exec_t *exec, mg_node_id_t n
                                 node_id, "dispatch buffer patch range is incompatible", NULL);
         }
         if (resource->access != MG_RESOURCE_ACCESS_READ) {
-            status = mg_patch_check_write(exec, node, node_id, buffer,
-                                          offset + resource->byte_offset, resource->byte_count,
-                                          out_error);
-            if (status != MG_STATUS_OK) return status;
+            status =
+                mg_patch_check_write(exec, node, node_id, buffer, offset + resource->byte_offset,
+                                     resource->byte_count, out_error);
+            if (status != MG_STATUS_OK)
+                return status;
         }
         mg_buffer_retain(buffer);
         mg_buffer_release(dispatch->buffers[i].buffer);
@@ -343,8 +356,9 @@ mg_status_t mgGraphExecPatchCopyNode(mg_graph_exec_t *exec, mg_node_id_t node_id
                             "copy patch descriptor is invalid", NULL);
     }
 
-    if (exec->device_impl && ((desc->src->device_impl && desc->src->device_impl != exec->device_impl) ||
-                              (desc->dst->device_impl && desc->dst->device_impl != exec->device_impl)))
+    if (exec->device_impl &&
+        ((desc->src->device_impl && desc->src->device_impl != exec->device_impl) ||
+         (desc->dst->device_impl && desc->dst->device_impl != exec->device_impl)))
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_PATCH, node_id,
                             "copy buffer belongs to a different device", NULL);
     mg_exec_copy_t *copy = &node->as.copy;
@@ -367,7 +381,8 @@ mg_status_t mgGraphExecPatchCopyNode(mg_graph_exec_t *exec, mg_node_id_t node_id
 
     status = mg_patch_check_write(exec, node, node_id, desc->dst, desc->dst_offset,
                                   desc->byte_count, out_error);
-    if (status != MG_STATUS_OK) return status;
+    if (status != MG_STATUS_OK)
+        return status;
     mg_buffer_retain(desc->src);
     mg_buffer_retain(desc->dst);
     mg_buffer_release(copy->src);
@@ -431,7 +446,8 @@ mg_status_t mgGraphExecPatchFillNode(mg_graph_exec_t *exec, mg_node_id_t node_id
 
     status = mg_patch_check_write(exec, node, node_id, desc->dst, desc->dst_offset,
                                   desc->byte_count, out_error);
-    if (status != MG_STATUS_OK) return status;
+    if (status != MG_STATUS_OK)
+        return status;
     mg_buffer_retain(desc->dst);
     mg_buffer_release(fill->dst);
     fill->dst = desc->dst;

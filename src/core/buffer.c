@@ -14,7 +14,8 @@ void mg_buffer_release(mg_buffer_t *buffer) {
         return;
     }
 
-    if (__atomic_fetch_sub(&buffer->ref_count, 1, __ATOMIC_ACQ_REL) != 1) return;
+    if (__atomic_fetch_sub(&buffer->ref_count, 1, __ATOMIC_ACQ_REL) != 1)
+        return;
 
     mg_backend_buffer_destroy(buffer);
     if (buffer->owner_release) {
@@ -66,7 +67,8 @@ void mg_event_release(mg_event_t *event) {
         return;
     }
 
-    if (__atomic_fetch_sub(&event->ref_count, 1, __ATOMIC_ACQ_REL) != 1) return;
+    if (__atomic_fetch_sub(&event->ref_count, 1, __ATOMIC_ACQ_REL) != 1)
+        return;
 
     mg_backend_event_destroy(event);
     free(event);

@@ -31,7 +31,8 @@ typedef struct mg_metal_buffer_wrap_desc {
     mg_metal_buffer_access_t access;
     uint32_t flags;
     /* Owner callbacks must be thread-safe. The final owner_release can run on a runtime completion
-     * or cleanup thread after handles are destroyed; context and callback code must remain valid. */
+     * or cleanup thread after handles are destroyed; context and callback code must remain valid.
+     */
     void *owner_context;
     void (*owner_retain)(void *owner_context);
     void (*owner_release)(void *owner_context);

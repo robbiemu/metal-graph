@@ -1044,8 +1044,7 @@ static bool mg_resource_access_writes(mg_resource_access_t access) {
 static mg_status_t mg_resource_uses_append(mg_resource_use_t **uses, size_t *count,
                                            size_t *capacity, const mg_node_t *node,
                                            const mg_buffer_t *buffer, size_t relative_offset,
-                                           size_t byte_count, bool writes,
-                                           mg_error_t **out_error) {
+                                           size_t byte_count, bool writes, mg_error_t **out_error) {
     if (!buffer || byte_count == 0) {
         return MG_STATUS_OK;
     }
@@ -1053,8 +1052,8 @@ static mg_status_t mg_resource_uses_append(mg_resource_use_t **uses, size_t *cou
         buffer->byte_offset > SIZE_MAX - relative_offset ||
         byte_count > SIZE_MAX - (buffer->byte_offset + relative_offset)) {
         return mg_set_error(out_error, MG_STATUS_INVALID_TOPOLOGY, MG_ERROR_STAGE_VALIDATE,
-                            node ? node->id : MG_NODE_ID_INVALID,
-                            "node resource range is invalid", NULL);
+                            node ? node->id : MG_NODE_ID_INVALID, "node resource range is invalid",
+                            NULL);
     }
 
     if (*count == *capacity) {
@@ -1069,21 +1068,15 @@ static mg_status_t mg_resource_uses_append(mg_resource_use_t **uses, size_t *cou
     }
 
     (*uses)[(*count)++] = (mg_resource_use_t){
-        node->index,
-        node->id,
-        buffer,
-        buffer->impl,
-        buffer->byte_offset + relative_offset,
-        byte_count,
-        writes,
+        node->index, node->id, buffer, buffer->impl, buffer->byte_offset + relative_offset,
+        byte_count,  writes,
     };
     return MG_STATUS_OK;
 }
 
 static mg_status_t mg_collect_dispatch_resource_uses(const mg_node_t *node,
                                                      mg_resource_use_t **uses, size_t *count,
-                                                     size_t *capacity,
-                                                     mg_error_t **out_error) {
+                                                     size_t *capacity, mg_error_t **out_error) {
     const mg_dispatch_node_t *dispatch = &node->as.dispatch;
     for (uint32_t i = 0; i < dispatch->buffer_count; ++i) {
         const mg_buffer_binding_t *binding = &dispatch->buffers[i];
@@ -1094,18 +1087,17 @@ static mg_status_t mg_collect_dispatch_resource_uses(const mg_node_t *node,
         bool writes = true;
         if (resource) {
             if (resource->byte_offset > SIZE_MAX - binding->offset) {
-                return mg_set_error(out_error, MG_STATUS_INVALID_TOPOLOGY,
-                                    MG_ERROR_STAGE_VALIDATE, node->id,
-                                    "dispatch resource range is invalid", NULL);
+                return mg_set_error(out_error, MG_STATUS_INVALID_TOPOLOGY, MG_ERROR_STAGE_VALIDATE,
+                                    node->id, "dispatch resource range is invalid", NULL);
             }
             relative_offset = binding->offset + resource->byte_offset;
             byte_count = resource->byte_count ? resource->byte_count
                                               : binding->buffer->length - relative_offset;
             writes = mg_resource_access_writes(resource->access);
         }
-        mg_status_t status = mg_resource_uses_append(uses, count, capacity, node, binding->buffer,
-                                                     relative_offset, byte_count, writes,
-                                                     out_error);
+        mg_status_t status =
+            mg_resource_uses_append(uses, count, capacity, node, binding->buffer, relative_offset,
+                                    byte_count, writes, out_error);
         if (status != MG_STATUS_OK) {
             return status;
         }
@@ -1120,8 +1112,8 @@ static mg_status_t mg_collect_node_resource_uses(const mg_node_t *node, mg_resou
     case MG_NODE_DISPATCH:
         return mg_collect_dispatch_resource_uses(node, uses, count, capacity, out_error);
     case MG_NODE_COPY: {
-        mg_status_t status = mg_resource_uses_append(uses, count, capacity, node,
-                                                     node->as.copy.src, node->as.copy.src_offset,
+        mg_status_t status = mg_resource_uses_append(uses, count, capacity, node, node->as.copy.src,
+                                                     node->as.copy.src_offset,
                                                      node->as.copy.byte_count, false, out_error);
         if (status != MG_STATUS_OK) {
             return status;
@@ -1137,18 +1129,18 @@ static mg_status_t mg_collect_node_resource_uses(const mg_node_t *node, mg_resou
     case MG_NODE_MPSGRAPH:
         for (uint32_t i = 0; i < node->as.mpsgraph.feed_count; ++i) {
             mg_mpsgraph_tensor_t *tensor = &node->as.mpsgraph.feeds[i];
-            mg_status_t status = mg_resource_uses_append(uses, count, capacity, node,
-                                                         tensor->buffer, tensor->byte_offset,
-                                                         tensor->byte_count, false, out_error);
+            mg_status_t status =
+                mg_resource_uses_append(uses, count, capacity, node, tensor->buffer,
+                                        tensor->byte_offset, tensor->byte_count, false, out_error);
             if (status != MG_STATUS_OK) {
                 return status;
             }
         }
         for (uint32_t i = 0; i < node->as.mpsgraph.target_count; ++i) {
             mg_mpsgraph_tensor_t *tensor = &node->as.mpsgraph.targets[i];
-            mg_status_t status = mg_resource_uses_append(uses, count, capacity, node,
-                                                         tensor->buffer, tensor->byte_offset,
-                                                         tensor->byte_count, true, out_error);
+            mg_status_t status =
+                mg_resource_uses_append(uses, count, capacity, node, tensor->buffer,
+                                        tensor->byte_offset, tensor->byte_count, true, out_error);
             if (status != MG_STATUS_OK) {
                 return status;
             }
@@ -1156,8 +1148,7 @@ static mg_status_t mg_collect_node_resource_uses(const mg_node_t *node, mg_resou
         return MG_STATUS_OK;
     default:
         if ((int)node->kind == MG_NODE_INTERNAL_WORKSPACE_FILL) {
-            return mg_resource_uses_append(uses, count, capacity, node,
-                                           node->as.workspace_fill.dst,
+            return mg_resource_uses_append(uses, count, capacity, node, node->as.workspace_fill.dst,
                                            node->as.workspace_fill.dst_offset,
                                            node->as.workspace_fill.size, true, out_error);
         }
@@ -1216,21 +1207,20 @@ static mg_status_t mg_graph_validate_unordered_writes(const mg_graph_t *graph,
             if (!uses[j].writes || uses[i].node_index == uses[j].node_index) {
                 continue;
             }
-            bool ordered =
-                reachable[uses[i].node_index * graph->node_count + uses[j].node_index] ||
-                reachable[uses[j].node_index * graph->node_count + uses[i].node_index];
-            if (ordered || !mg_backend_physical_overlap(uses[i].buffer, uses[i].absolute_offset,
-                                                       uses[i].byte_count, uses[j].buffer,
-                                                       uses[j].absolute_offset, uses[j].byte_count)) {
+            bool ordered = reachable[uses[i].node_index * graph->node_count + uses[j].node_index] ||
+                           reachable[uses[j].node_index * graph->node_count + uses[i].node_index];
+            if (ordered || !mg_backend_physical_overlap(
+                               uses[i].buffer, uses[i].absolute_offset, uses[i].byte_count,
+                               uses[j].buffer, uses[j].absolute_offset, uses[j].byte_count)) {
                 continue;
             }
-            mg_node_id_t node_id = uses[i].node_id < uses[j].node_id ? uses[i].node_id
-                                                                      : uses[j].node_id;
+            mg_node_id_t node_id =
+                uses[i].node_id < uses[j].node_id ? uses[i].node_id : uses[j].node_id;
             free(uses);
             free(reachable);
             return mg_set_error(out_error, MG_STATUS_INVALID_TOPOLOGY, MG_ERROR_STAGE_VALIDATE,
-                                node_id,
-                                "overlapping writes require explicit dependency ordering", NULL);
+                                node_id, "overlapping writes require explicit dependency ordering",
+                                NULL);
         }
     }
 

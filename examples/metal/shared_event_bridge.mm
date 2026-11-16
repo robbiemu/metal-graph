@@ -20,16 +20,18 @@ static void check(mg_status_t status, mg_error_t **error) {
 int main(void) {
     @autoreleasepool {
         id<MTLDevice> metal = MTLCreateSystemDefaultDevice();
-        if (!metal) return 77;
+        if (!metal)
+            return 77;
         id<MTLCommandQueue> producerQueue = [metal newCommandQueue];
         id<MTLCommandQueue> consumerQueue = [metal newCommandQueue];
         id<MTLSharedEvent> ready = [metal newSharedEvent];
         id<MTLBuffer> source = [metal newBufferWithLength:32 options:MTLResourceStorageModeShared];
         id<MTLBuffer> staging = [metal newBufferWithLength:32
-                                                  options:MTLResourceStorageModeShared |
-                                                          MTLResourceHazardTrackingModeUntracked];
+                                                   options:MTLResourceStorageModeShared |
+                                                           MTLResourceHazardTrackingModeUntracked];
         id<MTLBuffer> result = [metal newBufferWithLength:32 options:MTLResourceStorageModeShared];
-        if (!producerQueue || !consumerQueue || !ready || !source || !staging || !result) return 1;
+        if (!producerQueue || !consumerQueue || !ready || !source || !staging || !result)
+            return 1;
         memset(source.contents, 0, 32);
         memset(result.contents, 0, 32);
 
@@ -99,22 +101,27 @@ int main(void) {
         diagnostics.size = sizeof(diagnostics);
         check(mgLaunchGetDiagnostics(launch, &diagnostics, &error), &error);
         if (diagnostics.completed || diagnostics.synchronize_count != 0 ||
-            diagnostics.event_wait_count != 1 || diagnostics.event_signal_count != 1) return 1;
+            diagnostics.event_wait_count != 1 || diagnostics.event_signal_count != 1)
+            return 1;
 
         id<MTLCommandBuffer> producer = [producerQueue commandBuffer];
         id<MTLBlitCommandEncoder> blit = [producer blitCommandEncoder];
-        if (!producer || !consumer || !blit) return 1;
+        if (!producer || !consumer || !blit)
+            return 1;
         [blit fillBuffer:source range:NSMakeRange(0, 32) value:0x5A];
         [blit endEncoding];
         [producer encodeSignalEvent:ready value:1];
         [producer commit];
         check(mgLaunchSynchronize(launch, &error), &error);
         [consumer waitUntilCompleted]; // Explicit foreign-consumer completion.
-        if (consumer.status != MTLCommandBufferStatusCompleted) return 1;
+        if (consumer.status != MTLCommandBufferStatusCompleted)
+            return 1;
         check(mgLaunchGetDiagnostics(launch, &diagnostics, &error), &error);
-        if (!diagnostics.completed || diagnostics.synchronize_count != 1) return 1;
+        if (!diagnostics.completed || diagnostics.synchronize_count != 1)
+            return 1;
         for (size_t i = 0; i < 32; ++i) {
-            if (((const unsigned char *)result.contents)[i] != 0x5A) return 1;
+            if (((const unsigned char *)result.contents)[i] != 0x5A)
+                return 1;
         }
         mgLaunchDestroy(launch);
         mgDeviceDestroy(device);

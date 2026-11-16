@@ -282,14 +282,14 @@ struct mg_graph_exec {
     mg_workspace_plan_t workspace;
     mg_icb_plan_t icb;
     uint32_t in_flight_count;
-    uint32_t ref_count; /* caller ownership plus successfully returned launches */
+    uint32_t ref_count;            /* caller ownership plus successfully returned launches */
     uint32_t test_certified_count; /* internal test observation */
-    uint8_t test_fence_failure; /* internal per-exec injection */
-    void *test_completion_hold; /* borrowed, per-exec test semaphore */
-    void *test_unknown_unit; /* retained only by the controlled unknown-root fixture */
+    uint8_t test_fence_failure;    /* internal per-exec injection */
+    void *test_completion_hold;    /* borrowed, per-exec test semaphore */
+    void *test_unknown_unit;       /* retained only by the controlled unknown-root fixture */
     uint8_t test_stage_failure;
     uint8_t test_preflight_failure; /* 1: native metadata, 2: queue gate */
-    uint8_t test_raw_failure; /* private, per-exec deterministic test seam */
+    uint8_t test_raw_failure;       /* private, per-exec deterministic test seam */
     uint8_t test_mps_continuations;
     uint8_t test_mps_failure;
     uint32_t test_mps_observed_roots;
@@ -302,7 +302,7 @@ struct mg_launch {
     size_t impl_capacity;
     mg_graph_exec_t *exec;
     void *tracker_impl; /* retained backend completion tracker */
-    bool async_job; /* accepted scheduler job; public handle never owns its mutable roots */
+    bool async_job;     /* accepted scheduler job; public handle never owns its mutable roots */
     bool completed;
     mg_buffer_t **retained_buffers;
     size_t retained_buffer_count;
@@ -378,8 +378,8 @@ void mg_test_set_mps_failure(mg_graph_exec_t *exec, uint8_t mode);
 void mg_test_resolve_unknown_root(mg_graph_exec_t *exec);
 void *mg_backend_buffer_contents(mg_buffer_t *buffer);
 /* Offsets are native-buffer relative. */
-bool mg_backend_physical_overlap(const mg_buffer_t *a, size_t ao, size_t ac,
-                                 const mg_buffer_t *b, size_t bo, size_t bc);
+bool mg_backend_physical_overlap(const mg_buffer_t *a, size_t ao, size_t ac, const mg_buffer_t *b,
+                                 size_t bo, size_t bc);
 
 #ifdef __cplusplus
 }

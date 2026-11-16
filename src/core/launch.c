@@ -8,11 +8,9 @@ mg_status_t mgLaunchGetDiagnostics(const mg_launch_t *launch,
                                    mg_error_t **out_error) {
     mg_clear_error(out_error);
     size_t caller_size = out_diagnostics ? out_diagnostics->size : 0;
-    if (!launch || !out_diagnostics ||
-        caller_size < offsetof(mg_launch_diagnostics_t, completed)) {
+    if (!launch || !out_diagnostics || caller_size < offsetof(mg_launch_diagnostics_t, completed)) {
         return mg_set_error(out_error, MG_STATUS_INVALID_ARGUMENT, MG_ERROR_STAGE_SYNC,
-                            MG_NODE_ID_INVALID, "launch and diagnostics output are required",
-                            NULL);
+                            MG_NODE_ID_INVALID, "launch and diagnostics output are required", NULL);
     }
 
     memset(out_diagnostics, 0,

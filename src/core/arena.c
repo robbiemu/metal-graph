@@ -112,7 +112,8 @@ void mg_arena_release(mg_arena_t *arena) {
         return;
     }
 
-    if (__atomic_fetch_sub(&arena->ref_count, 1, __ATOMIC_ACQ_REL) != 1) return;
+    if (__atomic_fetch_sub(&arena->ref_count, 1, __ATOMIC_ACQ_REL) != 1)
+        return;
 
     free(arena);
 }

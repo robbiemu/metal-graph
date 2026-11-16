@@ -19,7 +19,10 @@ int main(void) {
     mg_stream_t *stream = NULL;
     mg_buffer_t *buffer = NULL;
     mg_status_t status = mgDeviceCreateSystemDefault(&device, &error);
-    if (status == MG_STATUS_UNSUPPORTED) { mgErrorDestroy(error); return 77; }
+    if (status == MG_STATUS_UNSUPPORTED) {
+        mgErrorDestroy(error);
+        return 77;
+    }
     expect(status, MG_STATUS_OK, &error);
     expect(mgStreamCreate(device, &stream, &error), MG_STATUS_OK, &error);
     expect(mgBufferCreateShared(device, 16, &buffer, &error), MG_STATUS_OK, &error);
@@ -45,8 +48,8 @@ int main(void) {
         expect(mgGraphCreate(&graph, &error), MG_STATUS_OK, &error);
         expect(mgGraphAddFillNode(graph, &a, &first, &error), MG_STATUS_OK, &error);
         expect(mgGraphAddFillNode(graph, &b, &second, &error), MG_STATUS_OK, &error);
-        expect(mgGraphSetNodePatchFlags(graph, second, MG_PATCH_FILL_RANGE, &error),
-               MG_STATUS_OK, &error);
+        expect(mgGraphSetNodePatchFlags(graph, second, MG_PATCH_FILL_RANGE, &error), MG_STATUS_OK,
+               &error);
         if (ordered) {
             expect(mgGraphAddDependency(graph, first, second, &error), MG_STATUS_OK, &error);
         }
@@ -60,9 +63,12 @@ int main(void) {
         expect(mgGraphLaunch(exec, stream, &launch, &error), MG_STATUS_OK, &error);
         expect(mgLaunchSynchronize(launch, &error), MG_STATUS_OK, &error);
         for (size_t i = 0; i < 16; ++i) {
-            unsigned char expected = ordered ? (i < 4 ? 0x11 : i < 12 ? 0x22 : 0)
+            unsigned char expected = ordered ? (i < 4    ? 0x11
+                                                : i < 12 ? 0x22
+                                                         : 0)
                                              : (i < 8 ? 0x11 : 0x22);
-            if (((const unsigned char *)mgBufferContents(buffer))[i] != expected) return 1;
+            if (((const unsigned char *)mgBufferContents(buffer))[i] != expected)
+                return 1;
         }
         mgLaunchDestroy(launch);
         mgGraphExecDestroy(exec);
