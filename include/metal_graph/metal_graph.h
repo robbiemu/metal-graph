@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 #define MG_VERSION_MAJOR 0
-#define MG_VERSION_MINOR 1
+#define MG_VERSION_MINOR 2
 #define MG_VERSION_PATCH 0
 
 #if defined(_WIN32)

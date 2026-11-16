@@ -16,8 +16,8 @@ def test_library_search_paths_include_source_checkout_build():
 
 
 def test_version_and_status():
-    assert mg.version() == (0, 1, 0)
-    assert mg.version_string() == "0.1.0"
+    assert mg.version() == (0, 2, 0)
+    assert mg.version_string() == "0.2.0"
     assert mg.status_string(0) == "ok"
 
 
@@ -47,7 +47,7 @@ def test_explicit_library_path_override_loads_when_valid(monkeypatch):
     monkeypatch.setattr(mg, "_LIB", None)
     monkeypatch.setenv("METAL_GRAPH_LIBRARY", str(SHARED_LIBRARY))
 
-    assert mg.version() == (0, 1, 0)
+    assert mg.version() == (0, 2, 0)
 
 
 def test_mlx_zero_copy_import_is_explicitly_unsupported():
