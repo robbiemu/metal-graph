@@ -4,6 +4,9 @@ Branch: `phase-5-mpsgraph-node`
 
 Status: implemented
 
+This note records the original phase scope. For current behavior, use the
+[API spec](../metal_graph_api_spec_v0.md); later runtime changes are noted below.
+
 ## Scope
 
 - Add optional MPSGraph tensor-subgraph island support.
@@ -84,10 +87,15 @@ MPSGraph support is controlled by the `MG_ENABLE_MPSGRAPH` CMake option and by f
 availability. When MPSGraph is unavailable, MPSGraph-node instantiation returns structured
 `MG_STATUS_UNSUPPORTED`.
 
-The Phase 5 backend uses conservative command-buffer segmentation around MPSGraph nodes. If raw
-Metal work has already been encoded before an MPSGraph node, that segment is committed and
-synchronized before encoding the MPSGraph executable. This is intentionally conservative until
-deeper MPSGraph hazard and command-buffer integration is specified.
+The initial Phase 5 backend waited on the host between raw Metal and MPSGraph segments. That
+behavior was superseded in 0.2.0. Mixed stages now advance from completion callbacks, preserving
+whole-job FIFO order on a stream without a host wait inside `mgGraphLaunch`.
+
+If the runtime cannot prove MPSGraph completion, synchronization reports an error while resources
+and reservations remain retained and later jobs on the stream do not advance. Retention can be
+indefinite; an error does not permit memory reuse. The
+[native runtime contract](../metal_graph_api_spec_v0.md#native-launch-and-synchronization-contract)
+defines deferred errors, completion diagnostics, and the limits of current validation.
 
 ## Future Work
 

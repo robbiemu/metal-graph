@@ -34,13 +34,19 @@ Optional backend capabilities include `MTLResidencySet`, `MTLIndirectCommandBuff
 v1 uses caller-side synchronization.
 
 - `mg_graph_t` is mutable and not thread-safe.
-- `mg_graph_exec_t` is immutable and reusable after instantiation, but v1 allows only one in-flight launch per exec.
+- `mg_graph_exec_t` has frozen topology and patchable defaults. Only one launch per exec may be in flight.
 - `mg_stream_t` is one-thread-at-a-time.
 - `mg_buffer_t` is shareable, but callers synchronize host access.
 - `mg_event_t` is shareable, but callers synchronize host-side event use unless an API says otherwise.
 - Destruction is caller-synchronized.
 
-A graph must not be mutated while `mgGraphInstantiate()` is running. Launching the same `mg_graph_exec_t` concurrently from multiple threads or streams is invalid in v1. Destroying a graph exec or stream while a launch using it is in flight is invalid in v1.
+A graph must not be mutated while `mgGraphInstantiate()` is running. Caller operations on an exec
+and its launches must be serialized. A second in-flight launch of the same exec is rejected.
+
+The earlier ban on destroying an in-flight exec or stream was superseded by the native runtime
+contract in 0.2.0. Accepted work retains its execution state after public-handle destruction;
+destruction neither waits nor cancels work. See the
+[native runtime contract](metal_graph_api_spec_v0.md#native-launch-and-synchronization-contract).
 
 Future versions may allow concurrent launches of the same immutable exec using independent per-launch state.
 
@@ -54,7 +60,12 @@ After successful instantiation, `mg_graph_exec_t` owns a frozen executable copy 
 
 Graph execs must retain or copy resources needed for relaunch, including cloned node descriptors, backend pipelines/plans, buffers, events, arena descriptors, and workspace allocations. Destroying a graph after successful instantiation must not invalidate the exec. Destroying user-facing buffer, event, or arena handles after successful instantiation must not invalidate the exec.
 
-Launches must retain backend resources required by submitted command buffers until completion, but this does not make destroying an in-flight exec or stream valid in v1. Callers must synchronize before destroying graph execs or streams involved in a launch.
+Accepted launches retain their executable, queue, and resources through terminal completion,
+including after early public-handle destruction. A live launch handle also retains its original
+resource bindings. Keep that handle to retrieve deferred errors through `mgLaunchSynchronize`.
+Retention does not authorize unsynchronized host access or memory reuse. If MPSGraph completion
+cannot be established, resources may remain retained and later jobs on the stream may stall;
+an error does not prove completion. The API spec defines these cases.
 
 Descriptors passed to graph construction functions are borrowed only for the duration of the call. Callers may stack-allocate descriptors and temporary arrays.
 
@@ -312,8 +323,10 @@ Decision:
 - Phase 5 uses MPSGraphExecutable package paths and fixed feed/target tensor metadata in the core C
   ABI, rather than native MPSGraph object handles.
 - GraphExec owns an exec-private copy of the package after successful instantiation.
-- The initial backend uses conservative command-buffer segmentation around MPSGraph nodes and may
-  synchronize prior raw Metal work before MPSGraph encoding.
+- The initial host-waiting implementation was superseded in 0.2.0. Mixed raw Metal/MPSGraph
+  stages now advance from completion callbacks within the stream's whole-job FIFO order.
+  See the [native runtime contract](metal_graph_api_spec_v0.md#native-launch-and-synchronization-contract)
+  for deferred errors and cases where completion cannot be proven.
 
 Future work:
 

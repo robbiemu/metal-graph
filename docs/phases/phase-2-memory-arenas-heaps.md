@@ -4,6 +4,9 @@ Branch: `phase-2-memory-arenas-heaps`
 
 Status: implemented
 
+This note records the original phase scope. For current behavior, use the
+[API spec](../metal_graph_api_spec_v0.md); later runtime changes are noted below.
+
 ## Scope
 
 Phase 2 introduces conservative transient workspace planning without changing the core execution
@@ -61,7 +64,10 @@ shared-library/release build needs that boundary.
 - Arena/workspace memory has no public host pointer and no stable public offset layout.
 - Workspace layout may change across independent instantiations.
 - Destroy functions do not implicitly synchronize GPU work.
-- Destroying a graph exec while a launch is in flight remains invalid v1 caller behavior.
+- The original ban on in-flight exec destruction was superseded in 0.2.0. Accepted launches retain
+  the exec and workspace through terminal completion after public-handle destruction. This does
+  not authorize memory reuse when completion is unproven; see the
+  [native runtime contract](../metal_graph_api_spec_v0.md#native-launch-and-synchronization-contract).
 
 ## Validation
 
