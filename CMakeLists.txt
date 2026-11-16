@@ -282,6 +282,13 @@ if(BUILD_TESTING)
 endif()
 
 if(APPLE)
+  add_executable(metal_graph_fill_copy_example examples/c/fill_copy_replay.c)
+  target_link_libraries(metal_graph_fill_copy_example PRIVATE MetalGraph::metal_graph)
+  if(BUILD_TESTING)
+    add_test(NAME metal_graph_fill_copy_example COMMAND metal_graph_fill_copy_example)
+    set_tests_properties(metal_graph_fill_copy_example PROPERTIES TIMEOUT 20)
+  endif()
+
   add_executable(metal_graph_shared_event_example examples/metal/shared_event_bridge.mm)
   target_compile_options(metal_graph_shared_event_example PRIVATE -fobjc-arc)
   target_link_libraries(metal_graph_shared_event_example PRIVATE MetalGraph::metal_graph)

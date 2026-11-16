@@ -1,6 +1,11 @@
 # Metal Graph API Spec v0
 
-This document captures the repository-local Phase 0-3 contract for Metal Graph. It is intentionally narrower than the broader technical specification and should be expanded as phases land.
+This document describes the current Metal Graph contract. Phase sections record when features
+were introduced; later sections extend or supersede earlier phase limits. The
+[native runtime contract](#native-launch-and-synchronization-contract),
+[native event interop](#native-metal-shared-event-interoperability), and
+[write ordering](#write-ordering-and-manual-hazards) sections define the current execution behavior.
+For a first run, start with the [README](../README.md#first-run).
 
 ## Model
 
@@ -189,9 +194,10 @@ Public ownership is create/destroy. Graph execs must retain/copy the buffers, ev
 
 ## Future Phases
 
-Later phases may add broader patch overlays, fuller hazard analysis, MPSGraph nodes, Python/MLX
-adapters, Swift convenience wrappers, and Rust bindings. Future phases must preserve the Phase 0-4
-naming convention and behavior unless an explicit API version change says otherwise.
+Optional MPSGraph nodes and the Python/MLX adapter are implemented and described below. Future
+work includes broader patch overlays, fuller hazard analysis, Swift convenience wrappers, and
+Rust bindings. Extensions must preserve the existing naming convention and documented behavior
+unless an explicit API version change says otherwise.
 
 Future ICB work includes dependency-aware grouping, resource-hazard-aware multi-dispatch
 eligibility, per-group diagnostics, and broader dispatch resource contracts for hazard analysis.

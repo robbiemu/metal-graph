@@ -4,6 +4,9 @@ Branch: `phase-1-copy-fill-events-barriers`
 
 Status: implemented
 
+This note records the original phase scope. For current behavior, use the
+[API spec](../metal_graph_api_spec_v0.md); later runtime changes are noted below.
+
 ## Scope
 
 - Add copy nodes over explicit source/destination buffer byte ranges.
@@ -19,11 +22,18 @@ Phase 1 remains single-device and single-queue oriented.
 
 Copy nodes are encoded as Metal blit copies on Apple platforms. Fill nodes are encoded as Metal blit fills with an 8-bit repeated value. Event nodes are timeline-style and backed by `MTLSharedEvent` on Apple platforms. Unsupported backends return `MG_STATUS_UNSUPPORTED` for event creation and backend execution.
 
-Barrier nodes are conservative graph ordering nodes in Phase 1. The current single-command-buffer, single-queue backend does not need to encode a public fence command for them; dependency ordering is preserved by the topologically ordered command encoding. This leaves room for `MTLFence`-backed behavior in later phases without exposing Metal types.
+Barrier nodes are conservative graph ordering nodes. Phase 1 used one command buffer and queue.
+The current backend may segment work and use internal fences for manual hazards; no public fence
+object is exposed. See [write ordering](../metal_graph_api_spec_v0.md#write-ordering-and-manual-hazards).
 
-All Phase 1 node parameters are frozen at graph instantiation and are not patchable.
+Phase 1 introduced frozen node parameters. Phase 3 later added patches for fields declared
+patchable before instantiation; see the [patch rules](../metal_graph_api_spec_v0.md#phase-3-semantics).
 
-`GraphExec` retains all buffers and events needed for relaunch. `mg_launch_t` also retains resources referenced by submitted command buffers until launch completion. This preserves backend resource lifetime, but v1 still treats destroying an exec or stream while a launch using it is in flight as invalid caller behavior.
+`GraphExec` retains the buffers and events needed for relaunch. The original prohibition on
+in-flight exec or stream destruction was superseded in 0.2.0: accepted launches retain their
+executable, queue, and resources through terminal completion after public-handle destruction.
+Destruction does not wait or cancel work. Keep a live launch handle to retrieve deferred errors.
+See the [native runtime contract](../metal_graph_api_spec_v0.md#native-launch-and-synchronization-contract).
 
 ## Constraints
 
