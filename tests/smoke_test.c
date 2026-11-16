@@ -9,7 +9,7 @@ int main(void) {
         return 1;
     }
 
-    if (strcmp(mgVersionString(), "0.1.0") != 0) {
+    if (strcmp(mgVersionString(), "0.2.0") != 0) {
         return 2;
     }
 

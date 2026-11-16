@@ -9,7 +9,7 @@ mg_version_t mgVersion(void) {
     return version;
 }
 
-const char *mgVersionString(void) { return "0.1.0"; }
+const char *mgVersionString(void) { return "0.2.0"; }
 
 const char *mgStatusString(mg_status_t status) {
     switch (status) {
